@@ -69,7 +69,7 @@ action:
         sequence:
           - service: notify.mobile_app_{{ device_attr(notify_device[0], 'name') | lower | replace(' ', '_') }}
             data:
-              title: "Frigate Alert 📷 - {{ camera_name }}"
+              title: "Frigate Alert - {{ camera_name }}"
               message: "{{ message_text }}"
               data:
                 image: "{{ snapshot }}"
@@ -81,7 +81,7 @@ action:
         sequence:
           - service: "{{ notify_pushover }}"
             data:
-              title: "Frigate Alert 📷 - {{ camera_name }}"
+              title: "Frigate Alert - {{ camera_name }}"
               message: "{{ message_text }}"
               data:
                 url: "{{ tap_action }}"
