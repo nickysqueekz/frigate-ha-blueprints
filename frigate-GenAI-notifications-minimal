@@ -1,7 +1,8 @@
-# 1.1.0 frigate_camera_notifications_with_genai_minimal.yaml
 blueprint:
   name: Frigate Camera Notifications with GenAI (Minimal)
-  description: Sends a simple notification from Frigate with optional GenAI text and Pushover support.
+  description: |
+    Version: 1.1.0
+    Sends a simple notification from Frigate with optional GenAI text and Pushover support.
   domain: automation
   input:
     camera:
