@@ -1,0 +1,117 @@
+# 1.1.0 frigate_camera_notifications_with_genai_full.yaml
+blueprint:
+  name: Frigate Camera Notifications with GenAI (Full)
+  description: |
+    Extension of SgtBatten's Stable.yaml blueprint for Frigate notifications,
+    with added support for GenAI captions and optional Pushover notifications.
+  domain: automation
+  input:
+    camera:
+      name: Camera name
+      description: The camera this automation applies to
+      selector:
+        text:
+    notify_device:
+      name: Notify Device (optional)
+      description: Device for mobile_app notifications
+      default: []
+      selector:
+        device:
+          integration: mobile_app
+          multiple: true
+    notify_pushover:
+      name: Pushover Notification Service (optional)
+      description: Full notify service name for Pushover (e.g. notify.pushover_user)
+      default: ""
+      selector:
+        text:
+    snapshot:
+      name: Snapshot URL
+      default: ""
+      selector:
+        text:
+    clip:
+      name: Clip URL
+      default: ""
+      selector:
+        text:
+    tap_action:
+      name: Tap Action URL
+      default: "/lovelace/cameras"
+      selector:
+        text:
+    tts_target:
+      name: TTS Media Player
+      default: []
+      selector:
+        entity:
+          domain: media_player
+          multiple: true
+
+mode: queued
+
+trigger:
+  - platform: mqtt
+    topic: frigate/events/+
+    payload: '{"type":"end"}'
+
+condition:
+  - condition: template
+    value_template: >
+      {{ trigger.payload_json.after.camera == camera }}
+
+variables:
+  camera_name: "{{ trigger.payload_json.after.camera | capitalize }}"
+  label: "{{ trigger.payload_json.after.label }}"
+  genai_text: "{{ trigger.payload_json.after.genai_text | default('', true) }}"
+  message_text: >-
+    {% if genai_text %}
+      {{ camera_name }}: {{ genai_text }}
+    {% else %}
+      Frigate detected a {{ label }} on {{ camera_name }}
+    {% endif %}
+  event_id: "{{ trigger.payload_json.after.id }}"
+  snapshot_url: "{{ snapshot }}"
+  clip_url: "{{ clip }}"
+  click_url: "{{ tap_action }}"
+
+action:
+  - choose:
+      - conditions: "{{ notify_device | length > 0 }}"
+        sequence:
+          - service: notify.mobile_app_{{ device_attr(notify_device[0], 'name') | lower | replace(' ', '_') }}
+            data:
+              title: "Frigate Alert 📷 - {{ camera_name }}"
+              message: "{{ message_text }}"
+              data:
+                image: "{{ snapshot_url }}"
+                clickAction: "{{ click_url }}"
+                tag: "{{ event_id }}"
+                group: "frigate"
+                actions:
+                  - action: URI
+                    title: "View Clip"
+                    uri: "{{ clip_url }}"
+                  - action: URI
+                    title: "View Camera"
+                    uri: "{{ click_url }}"
+
+      - conditions: "{{ notify_pushover != '' }}"
+        sequence:
+          - service: "{{ notify_pushover }}"
+            data:
+              title: "Frigate Alert 📷 - {{ camera_name }}"
+              message: "{{ message_text }}"
+              data:
+                url: "{{ click_url }}"
+                url_title: "View Camera"
+                image: "{{ snapshot_url }}"
+                priority: 0
+
+  - choose:
+      - conditions: "{{ tts_target | length > 0 }}"
+        sequence:
+          - service: tts.google_translate_say
+            data:
+              entity_id: "{{ tts_target }}"
+              message: "{{ message_text }}"
