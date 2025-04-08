@@ -1,7 +1,7 @@
-# 1.1.0 frigate_camera_notifications_with_genai_full.yaml
 blueprint:
   name: Frigate Camera Notifications with GenAI (Full)
   description: |
+    Version: 1.1.0
     Extension of SgtBatten's Stable.yaml blueprint for Frigate notifications,
     with added support for GenAI captions and optional Pushover notifications.
   domain: automation
