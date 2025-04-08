@@ -11,7 +11,7 @@ Full-featured Frigate notification with:
 - Optional Pushover support
 - TTS notification
 
-[![Import Full Version](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/nickysqueekz/frigate-ha-blueprints/main/frigate_camera_notifications_with_genai_full.yaml)
+[![Import Full Version](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/nickysqueekz/frigate-ha-blueprints/refs/heads/main/frigate-GenAI-notifications-full)
 
 ---
 
@@ -21,7 +21,7 @@ Lightweight Frigate notification with:
 - Mobile or Pushover notification
 - Clean and simple logic
 
-[![Import Minimal Version](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/nickysqueekz/frigate-ha-blueprints/main/frigate_camera_notifications_with_genai_minimal.yaml)
+[![Import Minimal Version](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/nickysqueekz/frigate-ha-blueprints/refs/heads/main/frigate-GenAI-notifications-minimal)
 
 ---
 
