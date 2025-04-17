@@ -5,10 +5,10 @@ blueprint:
   domain: automation
   input:
     pushover_target:
-      name: Pushover Target
-      description: The Pushover notify service to use
+      name: Pushover Notify Service
+      description: The notify service to use for sending alerts (e.g., notify.pushover)
       selector:
-        entity:
+        service:
           domain: notify
 
     camera_filter:
