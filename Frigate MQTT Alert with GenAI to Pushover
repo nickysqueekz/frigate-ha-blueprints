@@ -1,26 +1,41 @@
 blueprint:
-  name: Frigate MQTT Alert with GenAI to Pushover
+  name: Frigate MQTT Alert with GenAI to Pushover (Dropdowns)
   description: >
     Sends Pushover notifications for Frigate object detections using MQTT, including GenAI descriptions if available.
   domain: automation
   input:
     pushover_target:
       name: Pushover Target
-      description: The Pushover notification target (e.g., notify.pushover)
+      description: The Pushover notify service to use
       selector:
-        text:
+        entity:
+          domain: notify
+
     camera_filter:
-      name: (Optional) Camera Name Filter
+      name: (Optional) Camera Filter
       description: Only trigger if detection is from this camera
-      default: ""
+      default: []
       selector:
-        text:
+        entity:
+          domain: camera
+          multiple: false
+
     label_filter:
-      name: (Optional) Object Label Filter
-      description: Only trigger if detection matches this label (e.g., person, car, dog)
+      name: (Optional) Object Type
+      description: Only trigger for specific object type
       default: ""
       selector:
-        text:
+        select:
+          options:
+            - ""
+            - person
+            - car
+            - dog
+            - package
+            - license_plate
+            - face
+            - unknown
+          translation_key: label_options
 
 trigger:
   - platform: mqtt
@@ -38,9 +53,9 @@ condition:
   - condition: or
     conditions:
       - condition: template
-        value_template: "{{ not camera_filter or camera == camera_filter }}"
+        value_template: "{{ camera_filter == '' or camera_filter.split('.')[1] == camera }}"
       - condition: template
-        value_template: "{{ not label_filter or label == label_filter }}"
+        value_template: "{{ label_filter == '' or label == label_filter }}"
   - condition: template
     value_template: "{{ trigger.payload_json['after']['entered_zones'] | length > 0 }}"
 
