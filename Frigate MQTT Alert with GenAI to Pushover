@@ -1,24 +1,20 @@
 blueprint:
-  name: Frigate Pushover Notifications (Multi-Camera)
-  description: Send Frigate events with AI data and images to Pushover
+  name: Frigate to Pushover Notification (Multi-Camera, Multi-Object)
+  description: >
+    Sends Frigate AI event notifications with images to Pushover. 
+    Choose cameras, object types, and optionally specify Pushover device targets.
   domain: automation
   input:
     frigate_cameras:
-      name: Select Cameras
-      description: Choose multiple Frigate cameras
+      name: Frigate Cameras
+      description: Select one or more Frigate cameras to monitor.
       selector:
         device:
           integration: frigate
           multiple: true
-    pushover_target:
-      name: Pushover Notification Target
-      selector:
-        target:
-          entity:
-            domain: notify
     frigate_objects:
       name: Objects to Alert
-      description: Select detectable objects
+      description: Select object types to trigger notifications.
       default: []
       selector:
         select:
@@ -29,38 +25,55 @@ blueprint:
             - dog
             - cat
             - package
+    pushover_targets:
+      name: Pushover Device Names (optional)
+      description: >
+        Comma-separated list of Pushover device names to send notifications to.
+        Leave blank to notify all devices.
+      default: ""
+      selector:
+        text:
 
 variables:
-  frigate_url: "https://your-frigate-server.com"  # External Frigate URL
   event_id: "{{ trigger.payload_json['after']['id'] }}"
   camera: "{{ trigger.payload_json['after']['camera'] }}"
   object: "{{ trigger.payload_json['after']['label'] | lower }}"
-  ai_description: "{{ trigger.payload_json['after']['data']['sub_labels'] | first }}"
-  snapshot_url: "{{ frigate_url }}/api/events/{{ event_id }}/snapshot.jpg"
+  ai_description: >
+    {% set desc = trigger.payload_json['after'].get('sub_label', '') %}
+    {% if desc %}
+      {{ desc }}
+    {% else %}
+      {{ object | title }} detected
+    {% endif %}
+  snapshot_url: "http://10.10.10.81:5000/api/events/{{ event_id }}/snapshot.jpg"
+  pushover_targets_list: >
+    {% if pushover_targets %}
+      {{ pushover_targets.split(',') | map('trim') | list }}
+    {% else %}
+      []
+    {% endif %}
 
 trigger:
   - platform: mqtt
-    topic: "frigate/events"
-    payload: "{{ object }}"
-    value_template: "{{ trigger.payload_json['after']['label'] | lower }}"
+    topic: frigate/events
 
 condition:
   - condition: template
-    value_template: "{{ camera in input.frigate_cameras }}"
+    value_template: "{{ camera in frigate_cameras }}"
   - condition: template
-    value_template: "{{ object in input.frigate_objects }}"
+    value_template: "{{ object in frigate_objects }}"
 
 action:
   - service: notify.pushover
     data:
-      message: >
-        {{ ai_description if ai_description else object | title }} detected
-        in {{ camera | replace('_', ' ') | title }}
-      title: "Security Alert - {{ object | title }}"
+      message: "{{ ai_description }}"
+      title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
       data:
         attachment: "{{ snapshot_url }}"
         priority: 1
-      target: "{{ input.pushover_target }}"
+      {% if pushover_targets_list %}
+      target: "{{ pushover_targets_list }}"
+      {% endif %}
 
 mode: queued
 max: 10
