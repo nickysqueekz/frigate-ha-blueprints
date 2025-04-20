@@ -8,9 +8,10 @@ blueprint:
   input:
     frigate_cameras:
       name: Frigate Cameras
-      description: Select one or more Frigate cameras to monitor.
+      description: Select one or more Frigate camera entities.
       selector:
-        device:
+        entity:
+          domain: camera
           integration: frigate
           multiple: true
     frigate_objects:
@@ -35,12 +36,17 @@ blueprint:
       selector:
         text:
 
+trigger:
+  - platform: mqtt
+    topic: frigate/events
+
 variables:
-  event_id: "{{ trigger.payload_json['after']['id'] }}"
-  camera: "{{ trigger.payload_json['after']['camera'] }}"
-  object: "{{ trigger.payload_json['after']['label'] | lower }}"
+  payload: "{{ trigger.payload_json }}"
+  event_id: "{{ payload['after']['id'] }}"
+  camera: "{{ payload['after']['camera'] }}"
+  object: "{{ payload['after']['label'] | lower }}"
   ai_description: >
-    {% set desc = trigger.payload_json['after'].get('sub_label', '') %}
+    {% set desc = payload['after'].get('sub_label', '') %}
     {% if desc %}
       {{ desc }}
     {% else %}
@@ -48,15 +54,22 @@ variables:
     {% endif %}
   snapshot_url: "http://10.10.10.81:5000/api/events/{{ event_id }}/snapshot.jpg"
   pushover_targets_list: >
-    {{ pushover_targets.split(',') | map('trim') | select('string') | list if pushover_targets|trim else [] }}
-
-trigger:
-  - platform: mqtt
-    topic: frigate/events
+    {% if pushover_targets|trim %}
+      {{ pushover_targets.split(',') | map('trim') | list }}
+    {% else %}
+      []
+    {% endif %}
+  selected_cameras: >
+    {%- set ns = namespace(cameras=[]) %}
+    {%- for cam in frigate_cameras %}
+      {%- set cam_name = states[cam].object_id %}
+      {%- set ns.cameras = ns.cameras + [cam_name] %}
+    {%- endfor %}
+    {{ ns.cameras }}
 
 condition:
   - condition: template
-    value_template: "{{ camera in frigate_cameras }}"
+    value_template: "{{ camera in selected_cameras }}"
   - condition: template
     value_template: "{{ object in frigate_objects }}"
 
@@ -68,7 +81,7 @@ action:
       data:
         attachment: "{{ snapshot_url }}"
         priority: 1
-      target: "{{ pushover_targets_list }}"
+      target: "{{ pushover_targets_list if pushover_targets_list else none }}"
 
 mode: queued
 max: 10
