@@ -1,15 +1,16 @@
+
 blueprint:
   name: Frigate MQTT Alert with GenAI to Pushover (Dropdowns)
   description: >
     Sends Pushover notifications for Frigate object detections using MQTT, including GenAI descriptions if available.
   domain: automation
   input:
-    pushover_target:
-      name: Pushover Notify Service
-      description: The notify service to use for sending alerts (e.g., notify.pushover)
+    notification_target:
+      name: Notification Target
+      description: >
+        The Home Assistant notify service to use for sending alerts (e.g., notify.pushover, notify.mobile_app_yourdevice).
       selector:
-        service:
-          domain: notify
+        text:
 
     camera_filter:
       name: (Optional) Camera Filter
@@ -77,7 +78,7 @@ action:
         sequence:
           - variables:
               description: "{{ wait.trigger.payload_json['description'] }}"
-          - service: "{{ pushover_target }}"
+          - service: "{{ notification_target }}"
             data:
               title: "Frigate Alert: {{ label | title }} ({{ confidence }}%)"
               message: >
@@ -85,7 +86,7 @@ action:
                 📷 Snapshot: https://pub.domain.com/api/frigate/notifications/{{ event_id }}/snapshot.jpg
                 🎞️ Clip: https://pub.domain.com/api/frigate/notifications/{{ event_id }}/clip.mp4
       - default:
-          - service: "{{ pushover_target }}"
+          - service: "{{ notification_target }}"
             data:
               title: "Frigate Alert: {{ label | title }} ({{ confidence }}%)"
               message: >
