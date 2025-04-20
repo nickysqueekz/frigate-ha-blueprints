@@ -47,11 +47,7 @@ variables:
     {% endif %}
   snapshot_url: "http://10.10.10.81:5000/api/events/{{ event_id }}/snapshot.jpg"
   pushover_targets_list: >
-    {% if pushover_targets|trim != "" %}
-      {{ pushover_targets.split(',') | map('trim') | list }}
-    {% else %}
-      None
-    {% endif %}
+    {{ pushover_targets.split(',') | map('trim') | select('string') | list if pushover_targets|trim else [] }}
 
 trigger:
   - platform: mqtt
@@ -64,14 +60,25 @@ condition:
     value_template: "{{ object in frigate_objects }}"
 
 action:
-  - service: notify.pushover
-    data:
-      message: "{{ ai_description }}"
-      title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
-      data:
-        attachment: "{{ snapshot_url }}"
-        priority: 1
-      target: "{{ pushover_targets_list }}"
+  - choose:
+      - conditions: "{{ pushover_targets|trim != '' }}"
+        sequence:
+          - service: notify.pushover
+            data:
+              message: "{{ ai_description }}"
+              title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
+              data:
+                attachment: "{{ snapshot_url }}"
+                priority: 1
+              target: "{{ pushover_targets_list }}"
+    default:
+      - service: notify.pushover
+        data:
+          message: "{{ ai_description }}"
+          title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
+          data:
+            attachment: "{{ snapshot_url }}"
+            priority: 1
 
 mode: queued
 max: 10
