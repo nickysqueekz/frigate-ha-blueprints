@@ -1,72 +1,81 @@
 blueprint:
-  name: Frigate Notification Blueprint
-  description: This blueprint is used to set up camera-specific notifications in Frigate.
+  name: Frigate GenAI Pushover Notification
+  description: Send AI-analyzed Frigate events to Pushover with images
   domain: automation
   input:
-    notify_target:
-      name: "Notification Target"
-      description: "Select the notification target (e.g., Pushover, MQTT, etc.)."
+    frigate_cameras:
+      name: Frigate Cameras
+      description: Select cameras to monitor
       selector:
-        entity:
-          domain: notify
-
-    cameras:
-      name: "Cameras"
-      description: "Choose the cameras you want to include in the notification."
+        device:
+          integration: frigate
+          multiple: true
+    target_notify:
+      name: Pushover Target
+      description: Notification target for Pushover
       selector:
-        entity:
-          domain: camera
+        target:
+          entity:
+            domain: notify
+    frigate_objects:
+      name: Objects to Detect
+      description: Select objects to trigger notifications
       default: []
-
-    object_types:
-      name: "Object Types"
-      description: "Select the object types for detection (e.g., person, vehicle, etc.). Multiple selections allowed."
       selector:
         select:
           multiple: true
           options:
             - person
-            - vehicle
+            - car
             - dog
             - cat
-            - other
-
-    camera_count:
-      name: "Number of Cameras"
-      description: "Number of cameras you want to configure notifications for."
+            - package
+    genai_prompt:
+      name: AI Prompt
+      description: Customize the AI analysis prompt
+      default: "Briefly describe this security camera event. Focus on movement, objects, and potential concerns. Keep response under 100 characters."
       selector:
-        number:
-          min: 1
-          max: 10
-          step: 1
-      default: 1
+        text:
 
 trigger:
-  platform: state
-  entity_id: "{{ cameras }}"
-  to: "on"
+  - platform: mqtt
+    topic: frigate/events
+    payload: '{{ trigger.payload_json["after"]["label"] | lower }}'
+    value_template: '{{ value_json["after"]["label"] | lower }}'
+
+variables:
+  event_id: '{{ trigger.payload_json["after"]["id"] }}'
+  camera: '{{ trigger.payload_json["after"]["camera"] }}'
+  object: '{{ trigger.payload_json["after"]["label"] | lower }}'
+  zones: '{{ trigger.payload_json["after"]["entered_zones"] }}'
+  snapshot_url: '/api/frigate/notifications/{{ event_id }}/thumbnail.jpg'
+
+condition:
+  - condition: template
+    value_template: '{{ object in input.frigate_objects }}'
+  - condition: trigger
+    id: "{{ camera }}_{{ object }}"
 
 action:
-  - service: notify.{{ notify_target }}
+  - service: google_generative_ai_conversation.generate_content
     data:
-      message: >
-        Camera: {{ cameras.name }} detected objects: {{ object_types | join(', ') }}
-      title: "Frigate Alert for Camera: {{ cameras.name }}"
-  
-  - choose:
-      - conditions:
-          - condition: state
-            entity_id: "{{ cameras }}"
-            state: "on"
-        sequence:
-          - service: notify.{{ notify_target }}
-            data:
-              message: "Camera {{ cameras.name }} has detected objects: {{ object_types | join(', ') }}."
-              title: "Frigate Notification for Camera: {{ cameras.name }}"
+      prompt: >
+        {{ input.genai_prompt }}
+        Camera: {{ camera }}
+        Object: {{ object | title }}
+        Zones: {{ zones | join(', ') }}
+        Current time: {{ now().strftime("%H:%M") }}
+      image_filename: '{{ snapshot_url }}'
+    response_variable: ai_response
 
-repeatable_inputs:
-  - camera: camera_selector
-    object_types: object_type_selector
-    count: "{{ camera_count }}"
+  - service: notify.pushover
+    data:
+      message: "{{ ai_response.text }}"
+      title: "{{ object | title }} detected - {{ camera | replace('_', ' ') | title }}"
+      data:
+        attachment: '{{ snapshot_url }}'
+        priority: 1
+      target: !input target_notify
 
-# Additional automation logic or more actions for each camera
+mode: queued
+max: 10
