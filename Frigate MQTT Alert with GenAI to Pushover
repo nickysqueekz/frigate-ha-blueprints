@@ -42,11 +42,12 @@ trigger:
 
 variables:
   payload: "{{ trigger.payload_json }}"
-  event_id: "{{ payload['after']['id'] }}"
-  camera: "{{ payload['after']['camera'] }}"
-  object: "{{ payload['after']['label'] | lower }}"
+  event_type: "{{ payload.type }}"
+  event_id: "{{ payload.after.id }}"
+  camera: "{{ payload.after.camera }}"
+  object: "{{ payload.after.label | lower }}"
   ai_description: >
-    {% set desc = payload['after'].get('sub_label', '') %}
+    {% set desc = payload.after.sub_label %}
     {% if desc %}
       {{ desc }}
     {% else %}
@@ -60,14 +61,11 @@ variables:
       []
     {% endif %}
   selected_cameras: >
-    {%- set ns = namespace(cameras=[]) %}
-    {%- for cam in frigate_cameras %}
-      {%- set cam_name = states[cam].object_id %}
-      {%- set ns.cameras = ns.cameras + [cam_name] %}
-    {%- endfor %}
-    {{ ns.cameras }}
+    {{ frigate_cameras | map('replace', 'camera.', '') | list }}
 
 condition:
+  - condition: template
+    value_template: "{{ event_type == 'new' }}"
   - condition: template
     value_template: "{{ camera in selected_cameras }}"
   - condition: template
