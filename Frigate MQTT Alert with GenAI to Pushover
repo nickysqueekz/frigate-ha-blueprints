@@ -1,7 +1,7 @@
 blueprint:
   name: Frigate to Pushover Notification (Multi-Camera, Multi-Object)
   description: >
-    Sends Frigate AI event notifications with images to Pushover. 
+    Sends Frigate AI event notifications with images to Pushover.
     Choose cameras, object types, and optionally specify Pushover device targets.
   domain: automation
   input:
@@ -71,9 +71,8 @@ action:
       data:
         attachment: "{{ snapshot_url }}"
         priority: 1
-      {% if pushover_targets_list %}
-      target: "{{ pushover_targets_list }}"
-      {% endif %}
+      target: >
+        {{ pushover_targets_list if pushover_targets_list else None }}
 
 mode: queued
 max: 10
