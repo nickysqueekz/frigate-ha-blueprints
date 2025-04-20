@@ -1,97 +1,65 @@
-
 blueprint:
-  name: Frigate MQTT Alert with GenAI to Pushover (Dropdowns)
-  description: >
-    Sends Pushover notifications for Frigate object detections using MQTT, including GenAI descriptions if available.
+  name: Frigate Notification Blueprint
+  description: This blueprint is used to set up camera-specific notifications in Frigate.
   domain: automation
   input:
-    notification_target:
-      name: Notification Target
-      description: >
-        The Home Assistant notify service to use for sending alerts (e.g., notify.pushover, notify.mobile_app_yourdevice).
+    notify_target:
+      name: "Notification Target"
+      description: "Select the notification target (e.g., Pushover, MQTT, etc.)."
       selector:
-        text:
-
-    camera_filter:
-      name: (Optional) Camera Filter
-      description: Only trigger if detection is from this camera
+        entity:
+          domain: notify
+    cameras:
+      name: "Cameras"
+      description: "Select the cameras for notifications."
       default: []
       selector:
         entity:
           domain: camera
-          multiple: false
-
-    label_filter:
-      name: (Optional) Object Type
-      description: Only trigger for specific object type
-      default: ""
+    object_types:
+      name: "Object Types"
+      description: "Select the object types for detection (e.g., person, vehicle, etc.). Multiple selections allowed."
       selector:
         select:
+          multiple: true
           options:
-            - ""
             - person
-            - car
+            - vehicle
             - dog
-            - package
-            - license_plate
-            - face
-            - unknown
-          translation_key: label_options
+            - cat
+            - other
+    additional_cameras:
+      name: "Additional Cameras"
+      description: "Add more cameras for notification setup."
+      selector:
+        action:
+          type: button
+          text: "Add Another Camera"
 
 trigger:
-  - platform: mqtt
-    topic: frigate/events
-
-variables:
-  event_id: "{{ trigger.payload_json['after']['id'] }}"
-  camera: "{{ trigger.payload_json['after']['camera'] }}"
-  label: "{{ trigger.payload_json['after']['label'] }}"
-  confidence: "{{ (trigger.payload_json['after']['score'] * 100) | round(1) }}"
-
-condition:
-  - condition: template
-    value_template: "{{ trigger.payload_json['type'] == 'end' }}"
-  - condition: or
-    conditions:
-      - condition: template
-        value_template: "{{ camera_filter == '' or camera_filter.split('.')[1] == camera }}"
-      - condition: template
-        value_template: "{{ label_filter == '' or label == label_filter }}"
-  - condition: template
-    value_template: "{{ trigger.payload_json['after']['entered_zones'] | length > 0 }}"
+  platform: state
+  entity_id: "{{ cameras }}"
+  to: "on"
 
 action:
-  - wait_for_trigger:
-      - platform: mqtt
-        topic: frigate/tracked_object_update
-        value_template: >
-          {{ value_json['type'] == 'description'
-             and value_json['id'] == event_id
-             and value_json['camera'] == camera }}
-    timeout: "10"
-    continue_on_timeout: true
-
+  - service: notify.{{ notify_target }}
+    data:
+      message: >
+        Camera: {{ cameras.name }} detected objects: {{ object_types | join(', ') }}
+      title: "Frigate Alert for Camera: {{ cameras.name }}"
   - choose:
       - conditions:
-          - condition: template
-            value_template: "{{ wait.trigger is defined }}"
+          - condition: state
+            entity_id: "{{ cameras }}"
+            state: "on"
         sequence:
-          - variables:
-              description: "{{ wait.trigger.payload_json['description'] }}"
-          - service: "{{ notification_target }}"
+          - service: notify.{{ notify_target }}
             data:
-              title: "Frigate Alert: {{ label | title }} ({{ confidence }}%)"
-              message: >
-                {{ description }} (Camera: {{ camera }})
-                📷 Snapshot: https://pub.domain.com/api/frigate/notifications/{{ event_id }}/snapshot.jpg
-                🎞️ Clip: https://pub.domain.com/api/frigate/notifications/{{ event_id }}/clip.mp4
-      - default:
-          - service: "{{ notification_target }}"
-            data:
-              title: "Frigate Alert: {{ label | title }} ({{ confidence }}%)"
-              message: >
-                Detected a {{ label }} on {{ camera }}.
-                📷 Snapshot: https://pub.domain.com/api/frigate/notifications/{{ event_id }}/snapshot.jpg
-                🎞️ Clip: https://pub.domain.com/api/frigate/notifications/{{ event_id }}/clip.mp4
-mode: queued
-max: 50
+              message: "Camera {{ cameras.name }} has detected objects: {{ object_types | join(', ') }}."
+              title: "Frigate Notification for Camera: {{ cameras.name }}"
+
+# Add repeatable sections for multiple cameras
+repeatable_inputs:
+  - camera: camera_selector
+    object_types: object_type_selector
+    add_button: true
