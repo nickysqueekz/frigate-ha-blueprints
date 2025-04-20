@@ -3,6 +3,7 @@ blueprint:
   description: >
     Sends Frigate AI event notifications with images to Pushover.
     Choose cameras, object types, and optionally specify Pushover device targets.
+    If the device field is left blank, all Pushover devices will be notified.
   domain: automation
   input:
     frigate_cameras:
@@ -60,25 +61,14 @@ condition:
     value_template: "{{ object in frigate_objects }}"
 
 action:
-  - choose:
-      - conditions: "{{ pushover_targets|trim != '' }}"
-        sequence:
-          - service: notify.pushover
-            data:
-              message: "{{ ai_description }}"
-              title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
-              data:
-                attachment: "{{ snapshot_url }}"
-                priority: 1
-              target: "{{ pushover_targets_list }}"
-    default:
-      - service: notify.pushover
-        data:
-          message: "{{ ai_description }}"
-          title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
-          data:
-            attachment: "{{ snapshot_url }}"
-            priority: 1
+  - service: notify.pushover
+    data:
+      message: "{{ ai_description }}"
+      title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
+      data:
+        attachment: "{{ snapshot_url }}"
+        priority: 1
+      target: "{{ pushover_targets_list }}"
 
 mode: queued
 max: 10
