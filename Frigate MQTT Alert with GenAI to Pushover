@@ -47,10 +47,10 @@ variables:
     {% endif %}
   snapshot_url: "http://10.10.10.81:5000/api/events/{{ event_id }}/snapshot.jpg"
   pushover_targets_list: >
-    {% if pushover_targets %}
+    {% if pushover_targets|trim != "" %}
       {{ pushover_targets.split(',') | map('trim') | list }}
     {% else %}
-      []
+      None
     {% endif %}
 
 trigger:
@@ -71,8 +71,7 @@ action:
       data:
         attachment: "{{ snapshot_url }}"
         priority: 1
-      target: >
-        {{ pushover_targets_list if pushover_targets_list else None }}
+      target: "{{ pushover_targets_list }}"
 
 mode: queued
 max: 10
