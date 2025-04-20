@@ -9,13 +9,15 @@ blueprint:
       selector:
         entity:
           domain: notify
+
     cameras:
       name: "Cameras"
-      description: "Select the cameras for notifications."
-      default: []
+      description: "Choose the cameras you want to include in the notification."
       selector:
         entity:
           domain: camera
+      default: []
+
     object_types:
       name: "Object Types"
       description: "Select the object types for detection (e.g., person, vehicle, etc.). Multiple selections allowed."
@@ -28,13 +30,16 @@ blueprint:
             - dog
             - cat
             - other
-    additional_cameras:
-      name: "Additional Cameras"
-      description: "Add more cameras for notification setup."
+
+    camera_count:
+      name: "Number of Cameras"
+      description: "Number of cameras you want to configure notifications for."
       selector:
-        action:
-          type: button
-          text: "Add Another Camera"
+        number:
+          min: 1
+          max: 10
+          step: 1
+      default: 1
 
 trigger:
   platform: state
@@ -47,6 +52,7 @@ action:
       message: >
         Camera: {{ cameras.name }} detected objects: {{ object_types | join(', ') }}
       title: "Frigate Alert for Camera: {{ cameras.name }}"
+  
   - choose:
       - conditions:
           - condition: state
@@ -58,8 +64,9 @@ action:
               message: "Camera {{ cameras.name }} has detected objects: {{ object_types | join(', ') }}."
               title: "Frigate Notification for Camera: {{ cameras.name }}"
 
-# Add repeatable sections for multiple cameras
 repeatable_inputs:
   - camera: camera_selector
     object_types: object_type_selector
-    add_button: true
+    count: "{{ camera_count }}"
+
+# Additional automation logic or more actions for each camera
