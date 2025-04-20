@@ -1,25 +1,24 @@
 blueprint:
-  name: Frigate GenAI Pushover Notification
-  description: Send AI-analyzed Frigate events to Pushover with images
+  name: Frigate Pushover Notifications (Multi-Camera)
+  description: Send Frigate events with AI data and images to Pushover
   domain: automation
   input:
     frigate_cameras:
-      name: Frigate Cameras
-      description: Select cameras to monitor
+      name: Select Cameras
+      description: Choose multiple Frigate cameras
       selector:
         device:
           integration: frigate
           multiple: true
-    target_notify:
-      name: Pushover Target
-      description: Notification target for Pushover
+    pushover_target:
+      name: Pushover Notification Target
       selector:
         target:
           entity:
             domain: notify
     frigate_objects:
-      name: Objects to Detect
-      description: Select objects to trigger notifications
+      name: Objects to Alert
+      description: Select detectable objects
       default: []
       selector:
         select:
@@ -30,52 +29,38 @@ blueprint:
             - dog
             - cat
             - package
-    genai_prompt:
-      name: AI Prompt
-      description: Customize the AI analysis prompt
-      default: "Briefly describe this security camera event. Focus on movement, objects, and potential concerns. Keep response under 100 characters."
-      selector:
-        text:
+
+variables:
+  frigate_url: "https://your-frigate-server.com"  # External Frigate URL
+  event_id: "{{ trigger.payload_json['after']['id'] }}"
+  camera: "{{ trigger.payload_json['after']['camera'] }}"
+  object: "{{ trigger.payload_json['after']['label'] | lower }}"
+  ai_description: "{{ trigger.payload_json['after']['data']['sub_labels'] | first }}"
+  snapshot_url: "{{ frigate_url }}/api/events/{{ event_id }}/snapshot.jpg"
 
 trigger:
   - platform: mqtt
-    topic: frigate/events
-    payload: '{{ trigger.payload_json["after"]["label"] | lower }}'
-    value_template: '{{ value_json["after"]["label"] | lower }}'
-
-variables:
-  event_id: '{{ trigger.payload_json["after"]["id"] }}'
-  camera: '{{ trigger.payload_json["after"]["camera"] }}'
-  object: '{{ trigger.payload_json["after"]["label"] | lower }}'
-  zones: '{{ trigger.payload_json["after"]["entered_zones"] }}'
-  snapshot_url: '/api/frigate/notifications/{{ event_id }}/thumbnail.jpg'
+    topic: "frigate/events"
+    payload: "{{ object }}"
+    value_template: "{{ trigger.payload_json['after']['label'] | lower }}"
 
 condition:
   - condition: template
-    value_template: '{{ object in input.frigate_objects }}'
-  - condition: trigger
-    id: "{{ camera }}_{{ object }}"
+    value_template: "{{ camera in input.frigate_cameras }}"
+  - condition: template
+    value_template: "{{ object in input.frigate_objects }}"
 
 action:
-  - service: google_generative_ai_conversation.generate_content
-    data:
-      prompt: >
-        {{ input.genai_prompt }}
-        Camera: {{ camera }}
-        Object: {{ object | title }}
-        Zones: {{ zones | join(', ') }}
-        Current time: {{ now().strftime("%H:%M") }}
-      image_filename: '{{ snapshot_url }}'
-    response_variable: ai_response
-
   - service: notify.pushover
     data:
-      message: "{{ ai_response.text }}"
-      title: "{{ object | title }} detected - {{ camera | replace('_', ' ') | title }}"
+      message: >
+        {{ ai_description if ai_description else object | title }} detected
+        in {{ camera | replace('_', ' ') | title }}
+      title: "Security Alert - {{ object | title }}"
       data:
-        attachment: '{{ snapshot_url }}'
+        attachment: "{{ snapshot_url }}"
         priority: 1
-      target: !input target_notify
+      target: "{{ input.pushover_target }}"
 
 mode: queued
 max: 10
