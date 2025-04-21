@@ -1,9 +1,8 @@
 blueprint:
-  name: Frigate to Pushover Notification (Multi-Camera, Multi-Object)
+  name: Frigate MQTT Alert with GenAI to Pushover
   description: >
-    Sends Frigate AI event notifications with images to Pushover.
-    Choose cameras, object types, and optionally specify Pushover device targets.
-    If the device field is left blank, all Pushover devices will be notified.
+    Sends Frigate MQTT AI event notifications (with snapshots) to Pushover.
+    Choose cameras and object types to alert on. Compatible with Graylog logging setups.
   domain: automation
   input:
     frigate_cameras:
@@ -14,6 +13,7 @@ blueprint:
           domain: camera
           integration: frigate
           multiple: true
+
     frigate_objects:
       name: Objects to Alert
       description: Select object types to trigger notifications.
@@ -27,20 +27,24 @@ blueprint:
             - dog
             - cat
             - package
+
     pushover_targets:
       name: Pushover Device Names (optional)
       description: >
-        Comma-separated list of Pushover device names to send notifications to.
+        Comma-separated list of Pushover device names.
         Leave blank to notify all devices.
       default: ""
       selector:
         text:
 
-trigger:
-  - platform: mqtt
-    topic: frigate/events
-
 variables:
+  frigate_cameras: !input frigate_cameras
+  frigate_objects: !input frigate_objects
+  pushover_targets: !input pushover_targets
+
+  selected_cameras: >
+    {{ frigate_cameras | map('replace', 'camera.', '') | list }}
+
   payload: "{{ trigger.payload_json }}"
   event_type: "{{ payload.type }}"
   event_id: "{{ payload.after.id }}"
@@ -53,15 +57,19 @@ variables:
     {% else %}
       {{ object | title }} detected
     {% endif %}
+
   snapshot_url: "http://10.10.10.81:5000/api/events/{{ event_id }}/snapshot.jpg"
+
   pushover_targets_list: >
     {% if pushover_targets|trim %}
       {{ pushover_targets.split(',') | map('trim') | list }}
     {% else %}
       []
     {% endif %}
-  selected_cameras: >
-    {{ frigate_cameras | map('replace', 'camera.', '') | list }}
+
+trigger:
+  - platform: mqtt
+    topic: frigate/events
 
 condition:
   - condition: template
@@ -80,6 +88,12 @@ action:
         attachment: "{{ snapshot_url }}"
         priority: 1
       target: "{{ pushover_targets_list if pushover_targets_list else none }}"
+
+  # Optionally log the event explicitly for Graylog (via Logspout):
+  - service: system_log.write
+    data:
+      level: info
+      message: "Frigate event: {{ object }} detected on {{ camera }} | Snapshot: {{ snapshot_url }}"
 
 mode: queued
 max: 10
