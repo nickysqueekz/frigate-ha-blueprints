@@ -1,8 +1,10 @@
 blueprint:
-  name: Frigate MQTT Alert with GenAI to Pushover
+  name: Frigate MQTT Alert with GenAI to Pushover or HA Mobile
   description: >
-    Sends Frigate MQTT AI event notifications (with snapshots) to Pushover.
-    Choose cameras and object types to alert on. Compatible with Graylog logging setups.
+    Sends Frigate AI event notifications (with GenAI descriptions if available)
+    to either Pushover or Home Assistant mobile notifications.
+    - Detects initial and updated GenAI events cleanly.
+    - Allows updating mobile notifications when GenAI description appears.
   domain: automation
   input:
     frigate_cameras:
@@ -28,11 +30,30 @@ blueprint:
             - cat
             - package
 
+    notification_method:
+      name: Notification Method
+      description: Choose how to send the notification.
+      default: pushover
+      selector:
+        select:
+          options:
+            - pushover
+            - homeassistant
+
     pushover_targets:
       name: Pushover Device Names (optional)
       description: >
-        Comma-separated list of Pushover device names.
+        Comma-separated list of Pushover device names (only if using pushover).
         Leave blank to notify all devices.
+      default: ""
+      selector:
+        text:
+
+    mobile_device:
+      name: Mobile App Device Name (optional)
+      description: >
+        Home Assistant mobile app device name (only if using homeassistant).
+        Example: mobile_app_pixel_7_pro
       default: ""
       selector:
         text:
@@ -40,7 +61,9 @@ blueprint:
 variables:
   frigate_cameras: !input frigate_cameras
   frigate_objects: !input frigate_objects
+  notification_method: !input notification_method
   pushover_targets: !input pushover_targets
+  mobile_device: !input mobile_device
 
   selected_cameras: >
     {{ frigate_cameras | map('replace', 'camera.', '') | list }}
@@ -50,10 +73,12 @@ variables:
   event_id: "{{ payload.after.id }}"
   camera: "{{ payload.after.camera }}"
   object: "{{ payload.after.label | lower }}"
+
   ai_description: >
-    {% set desc = payload.after.sub_label %}
-    {% if desc %}
-      {{ desc }}
+    {% if payload.after.genai is defined and payload.after.genai.description is defined %}
+      {{ payload.after.genai.description }}
+    {% elif payload.after.sub_label is defined %}
+      {{ payload.after.sub_label }}
     {% else %}
       {{ object | title }} detected
     {% endif %}
@@ -72,28 +97,58 @@ trigger:
     topic: frigate/events
 
 condition:
-  - condition: template
-    value_template: "{{ event_type == 'new' }}"
-  - condition: template
-    value_template: "{{ camera in selected_cameras }}"
-  - condition: template
-    value_template: "{{ object in frigate_objects }}"
+  - condition: and
+    conditions:
+      - condition: template
+        value_template: "{{ camera in selected_cameras }}"
+      - condition: template
+        value_template: "{{ object in frigate_objects }}"
+      - condition: or
+        conditions:
+          - condition: template
+            value_template: "{{ event_type == 'new' }}"
+          - condition: and
+            conditions:
+              - condition: template
+                value_template: "{{ event_type == 'update' }}"
+              - condition: template
+                value_template: "{{ payload.after.genai is defined and payload.after.genai.description is defined }}"
 
 action:
-  - service: notify.pushover
-    data:
-      message: "{{ ai_description }}"
-      title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
-      data:
-        attachment: "{{ snapshot_url }}"
-        priority: 1
-      target: "{{ pushover_targets_list if pushover_targets_list else none }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ notification_method == 'pushover' }}"
+        sequence:
+          - service: notify.pushover
+            data:
+              message: >
+                {% if event_type == 'update' %}
+                  (Updated with GenAI) {{ ai_description }}
+                {% else %}
+                  {{ ai_description }}
+                {% endif %}
+              title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
+              data:
+                attachment: "{{ snapshot_url }}"
+                priority: 1
+              target: "{{ pushover_targets_list if pushover_targets_list else none }}"
 
-  # Optionally log the event explicitly for Graylog (via Logspout):
-  - service: system_log.write
-    data:
-      level: info
-      message: "Frigate event: {{ object }} detected on {{ camera }} | Snapshot: {{ snapshot_url }}"
+      - conditions:
+          - condition: template
+            value_template: "{{ notification_method == 'homeassistant' }}"
+        sequence:
+          - service: "notify.mobile_app_{{ mobile_device }}"
+            data:
+              message: "{{ ai_description }}"
+              title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
+              data:
+                tag: "frigate_{{ event_id }}"
+                notification_id: "frigate_alert_{{ event_id }}"
+                update: true
+                image: "{{ snapshot_url }}"
+                ttl: 0
+                priority: high
 
 mode: queued
 max: 10
