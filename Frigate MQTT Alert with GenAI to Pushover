@@ -1,10 +1,10 @@
 blueprint:
-  name: Frigate MQTT Alert with GenAI to Pushover or HA Mobile
+  name: Frigate MQTT Alert with GenAI to Home Assistant Mobile
   description: >
     Sends Frigate AI event notifications (with GenAI descriptions if available)
-    to either Pushover or Home Assistant mobile notifications.
-    - Detects initial and updated GenAI events cleanly.
-    - Allows updating mobile notifications when GenAI description appears.
+    via Home Assistant Mobile App notifications.
+    - Supports GenAI delayed updates cleanly.
+    - Updates existing mobile notification using tag and update=true.
   domain: automation
   input:
     frigate_cameras:
@@ -30,39 +30,17 @@ blueprint:
             - cat
             - package
 
-    notification_method:
-      name: Notification Method
-      description: Choose how to send the notification.
-      default: pushover
-      selector:
-        select:
-          options:
-            - pushover
-            - homeassistant
-
-    pushover_targets:
-      name: Pushover Device Names (optional)
-      description: >
-        Comma-separated list of Pushover device names (only if using pushover).
-        Leave blank to notify all devices.
-      default: ""
-      selector:
-        text:
-
     mobile_device:
-      name: Mobile App Device Name (optional)
+      name: Mobile App Device Name
       description: >
-        Home Assistant mobile app device name (only if using homeassistant).
-        Example: mobile_app_pixel_7_pro
-      default: ""
+        Enter your Home Assistant mobile app notify service (example: pixel_7_pro).
+        If your notify service is `notify.mobile_app_pixel_7_pro`, enter `pixel_7_pro`.
       selector:
         text:
 
 variables:
   frigate_cameras: !input frigate_cameras
   frigate_objects: !input frigate_objects
-  notification_method: !input notification_method
-  pushover_targets: !input pushover_targets
   mobile_device: !input mobile_device
 
   selected_cameras: >
@@ -84,13 +62,6 @@ variables:
     {% endif %}
 
   snapshot_url: "http://10.10.10.81:5000/api/events/{{ event_id }}/snapshot.jpg"
-
-  pushover_targets_list: >
-    {% if pushover_targets|trim %}
-      {{ pushover_targets.split(',') | map('trim') | list }}
-    {% else %}
-      []
-    {% endif %}
 
 trigger:
   - platform: mqtt
@@ -115,40 +86,17 @@ condition:
                 value_template: "{{ payload.after.genai is defined and payload.after.genai.description is defined }}"
 
 action:
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ notification_method == 'pushover' }}"
-        sequence:
-          - service: notify.pushover
-            data:
-              message: >
-                {% if event_type == 'update' %}
-                  (Updated with GenAI) {{ ai_description }}
-                {% else %}
-                  {{ ai_description }}
-                {% endif %}
-              title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
-              data:
-                attachment: "{{ snapshot_url }}"
-                priority: 1
-              target: "{{ pushover_targets_list if pushover_targets_list else none }}"
-
-      - conditions:
-          - condition: template
-            value_template: "{{ notification_method == 'homeassistant' }}"
-        sequence:
-          - service: "notify.mobile_app_{{ mobile_device }}"
-            data:
-              message: "{{ ai_description }}"
-              title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
-              data:
-                tag: "frigate_{{ event_id }}"
-                notification_id: "frigate_alert_{{ event_id }}"
-                update: true
-                image: "{{ snapshot_url }}"
-                ttl: 0
-                priority: high
+  - service: "notify.mobile_app_{{ mobile_device }}"
+    data:
+      message: "{{ ai_description }}"
+      title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
+      data:
+        tag: "frigate_{{ event_id }}"
+        notification_id: "frigate_alert_{{ event_id }}"
+        update: true
+        image: "{{ snapshot_url }}"
+        ttl: 0
+        priority: high
 
 mode: queued
 max: 10
