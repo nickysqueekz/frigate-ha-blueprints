@@ -94,9 +94,7 @@ action:
         channel: Frigate
         persistent: true
         update: true
-        {% if snapshot_url %}
-        image: "{{ snapshot_url }}"
-        {% endif %}
+        image: "{{ snapshot_url if snapshot_url else '' }}"
         actions:
           - action: URI
             title: "View Clip"
