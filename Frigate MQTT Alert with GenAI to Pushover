@@ -1,10 +1,9 @@
 blueprint:
   name: Frigate MQTT Alert with GenAI to HA Mobile App
-  description: |
-    Sends Frigate MQTT AI event notifications to Home Assistant Mobile App.
-    Listens for both detection events and AI-generated description updates.
-    Updates mobile notifications when better GenAI text becomes available.
-
+  description: >
+    Sends Frigate event notifications to Home Assistant mobile devices.
+    Includes GenAI text if available, snapshot images if available,
+    and action buttons for viewing both clip and snapshot.
   domain: automation
   input:
     frigate_cameras:
@@ -31,11 +30,10 @@ blueprint:
             - package
 
     mobile_device:
-      name: Home Assistant Mobile Device
-      description: Mobile device name for notifications (e.g., my_pixel_7).
+      name: Mobile Device (HA Mobile App)
+      description: Mobile device name for notifications (e.g., pixel_8, motorola_razr_2024)
       selector:
-        device:
-          integration: mobile_app
+        text:
 
 variables:
   frigate_cameras: !input frigate_cameras
@@ -47,40 +45,25 @@ variables:
 
   payload: "{{ trigger.payload_json }}"
   event_type: "{{ payload.type }}"
-
-  event_id: >
-    {% if payload.get('after') %}
-      {{ payload.after.id }}
-    {% else %}
-      {{ payload.id }}
-    {% endif %}
-
-  camera: >
-    {% if payload.get('after') %}
-      {{ payload.after.camera }}
-    {% else %}
-      {{ payload.camera }}
-    {% endif %}
-
-  object: >
-    {% if payload.get('after') %}
-      {{ payload.after.label | lower }}
-    {% else %}
-      {{ payload.label | lower }}
-    {% endif %}
-
+  event_id: "{{ (payload.after.id if payload.after is defined else payload.id) | default('') }}"
+  camera: "{{ (payload.after.camera if payload.after is defined else payload.camera) | default('') }}"
+  object: "{{ (payload.after.label if payload.after is defined else payload.label) | lower | default('') }}"
+  max_severity: "{{ (payload.after.max_severity if payload.after is defined else payload.max_severity) | default('detection') }}"
   ai_description: >
-    {% if payload.type == 'description' and payload.description is defined %}
+    {% if event_type == 'description' and payload.description is defined %}
       {{ payload.description }}
-    {% elif payload.after is defined and payload.after.genai is defined and payload.after.genai.description is defined %}
-      {{ payload.after.genai.description }}
     {% elif payload.after is defined and payload.after.sub_label is defined %}
       {{ payload.after.sub_label }}
     {% else %}
       {{ object | title }} detected
     {% endif %}
-
-  snapshot_url: "http://10.10.10.81:5000/api/events/{{ event_id }}/snapshot.jpg"
+  snapshot_url: >
+    {% if (payload.after is defined and payload.after.has_snapshot) or (payload.has_snapshot is defined and payload.has_snapshot) %}
+      http://10.10.10.81:5000/api/events/{{ event_id }}/snapshot.jpg
+    {% else %}
+      ""
+    {% endif %}
+  clip_url: "http://10.10.10.81:5000/api/events/{{ event_id }}/clip.mp4"
 
 trigger:
   - platform: mqtt
@@ -90,16 +73,13 @@ trigger:
 
 condition:
   - condition: template
-    value_template: >
-      {{ event_type in ['new', 'update', 'description'] }}
-
+    value_template: "{{ event_type in ['new', 'update', 'description'] }}"
   - condition: template
-    value_template: >
-      {{ camera in selected_cameras }}
-
+    value_template: "{{ camera in selected_cameras }}"
   - condition: template
-    value_template: >
-      {{ object in frigate_objects }}
+    value_template: "{{ object in frigate_objects }}"
+  - condition: template
+    value_template: "{{ max_severity == 'alert' }}"
 
 action:
   - service: notify.mobile_app_{{ mobile_device }}
@@ -107,7 +87,6 @@ action:
       message: "{{ ai_description }}"
       title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
       data:
-        image: "{{ snapshot_url }}"
         tag: "frigate_{{ event_id }}"
         notification_icon: mdi:cctv
         ttl: 0
@@ -115,6 +94,16 @@ action:
         channel: Frigate
         persistent: true
         update: true
+        {% if snapshot_url %}
+        image: "{{ snapshot_url }}"
+        {% endif %}
+        actions:
+          - action: URI
+            title: "View Clip"
+            uri: "{{ clip_url }}"
+          - action: URI
+            title: "View Snapshot"
+            uri: "{{ snapshot_url }}"
 
 mode: queued
-max: 20
+max: 10
