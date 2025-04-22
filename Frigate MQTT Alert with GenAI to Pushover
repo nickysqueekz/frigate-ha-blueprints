@@ -34,3 +34,87 @@ blueprint:
       name: Home Assistant Mobile Device
       description: Mobile device name for notifications (e.g., my_pixel_7).
       selector:
+        device:
+          integration: mobile_app
+
+variables:
+  frigate_cameras: !input frigate_cameras
+  frigate_objects: !input frigate_objects
+  mobile_device: !input mobile_device
+
+  selected_cameras: >
+    {{ frigate_cameras | map('replace', 'camera.', '') | list }}
+
+  payload: "{{ trigger.payload_json }}"
+  event_type: "{{ payload.type }}"
+
+  event_id: >
+    {% if payload.get('after') %}
+      {{ payload.after.id }}
+    {% else %}
+      {{ payload.id }}
+    {% endif %}
+
+  camera: >
+    {% if payload.get('after') %}
+      {{ payload.after.camera }}
+    {% else %}
+      {{ payload.camera }}
+    {% endif %}
+
+  object: >
+    {% if payload.get('after') %}
+      {{ payload.after.label | lower }}
+    {% else %}
+      {{ payload.label | lower }}
+    {% endif %}
+
+  ai_description: >
+    {% if payload.type == 'description' and payload.description is defined %}
+      {{ payload.description }}
+    {% elif payload.after is defined and payload.after.genai is defined and payload.after.genai.description is defined %}
+      {{ payload.after.genai.description }}
+    {% elif payload.after is defined and payload.after.sub_label is defined %}
+      {{ payload.after.sub_label }}
+    {% else %}
+      {{ object | title }} detected
+    {% endif %}
+
+  snapshot_url: "http://10.10.10.81:5000/api/events/{{ event_id }}/snapshot.jpg"
+
+trigger:
+  - platform: mqtt
+    topic: frigate/events
+  - platform: mqtt
+    topic: frigate/tracked_object_update
+
+condition:
+  - condition: template
+    value_template: >
+      {{ event_type in ['new', 'update', 'description'] }}
+
+  - condition: template
+    value_template: >
+      {{ camera in selected_cameras }}
+
+  - condition: template
+    value_template: >
+      {{ object in frigate_objects }}
+
+action:
+  - service: notify.mobile_app_{{ mobile_device }}
+    data:
+      message: "{{ ai_description }}"
+      title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
+      data:
+        image: "{{ snapshot_url }}"
+        tag: "frigate_{{ event_id }}"
+        notification_icon: mdi:cctv
+        ttl: 0
+        priority: high
+        channel: Frigate
+        persistent: true
+        update: true
+
+mode: queued
+max: 20
