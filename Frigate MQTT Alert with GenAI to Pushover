@@ -1,10 +1,10 @@
 blueprint:
-  name: Frigate MQTT Alert with GenAI to Home Assistant Mobile
-  description: >
-    Sends Frigate AI event notifications (with GenAI descriptions if available)
-    via Home Assistant Mobile App notifications.
-    - Supports GenAI delayed updates cleanly.
-    - Updates existing mobile notification using tag and update=true.
+  name: Frigate MQTT Alert with GenAI to HA Mobile App
+  description: |
+    Sends Frigate MQTT AI event notifications to Home Assistant Mobile App.
+    Listens for both detection events and AI-generated description updates.
+    Updates mobile notifications when better GenAI text becomes available.
+
   domain: automation
   input:
     frigate_cameras:
@@ -31,72 +31,6 @@ blueprint:
             - package
 
     mobile_device:
-      name: Mobile App Device Name
-      description: >
-        Enter your Home Assistant mobile app notify service (example: pixel_7_pro).
-        If your notify service is `notify.mobile_app_pixel_7_pro`, enter `pixel_7_pro`.
+      name: Home Assistant Mobile Device
+      description: Mobile device name for notifications (e.g., my_pixel_7).
       selector:
-        text:
-
-variables:
-  frigate_cameras: !input frigate_cameras
-  frigate_objects: !input frigate_objects
-  mobile_device: !input mobile_device
-
-  selected_cameras: >
-    {{ frigate_cameras | map('replace', 'camera.', '') | list }}
-
-  payload: "{{ trigger.payload_json }}"
-  event_type: "{{ payload.type }}"
-  event_id: "{{ payload.after.id }}"
-  camera: "{{ payload.after.camera }}"
-  object: "{{ payload.after.label | lower }}"
-
-  ai_description: >
-    {% if payload.after.genai is defined and payload.after.genai.description is defined %}
-      {{ payload.after.genai.description }}
-    {% elif payload.after.sub_label is defined %}
-      {{ payload.after.sub_label }}
-    {% else %}
-      {{ object | title }} detected
-    {% endif %}
-
-  snapshot_url: "http://10.10.10.81:5000/api/events/{{ event_id }}/snapshot.jpg"
-
-trigger:
-  - platform: mqtt
-    topic: frigate/events
-
-condition:
-  - condition: and
-    conditions:
-      - condition: template
-        value_template: "{{ camera in selected_cameras }}"
-      - condition: template
-        value_template: "{{ object in frigate_objects }}"
-      - condition: or
-        conditions:
-          - condition: template
-            value_template: "{{ event_type == 'new' }}"
-          - condition: and
-            conditions:
-              - condition: template
-                value_template: "{{ event_type == 'update' }}"
-              - condition: template
-                value_template: "{{ payload.after.genai is defined and payload.after.genai.description is defined }}"
-
-action:
-  - service: "notify.mobile_app_{{ mobile_device }}"
-    data:
-      message: "{{ ai_description }}"
-      title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
-      data:
-        tag: "frigate_{{ event_id }}"
-        notification_id: "frigate_alert_{{ event_id }}"
-        update: true
-        image: "{{ snapshot_url }}"
-        ttl: 0
-        priority: high
-
-mode: queued
-max: 10
