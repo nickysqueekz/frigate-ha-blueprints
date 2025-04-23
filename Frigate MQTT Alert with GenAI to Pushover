@@ -1,13 +1,14 @@
 blueprint:
-  name: Frigate MQTT Alert (GenAI Only, No Image)
+  name: Frigate MQTT Alert (GenAI Only, Selectable Severity)
   description: >
-    Sends a text-only Home Assistant mobile notification
-    from Frigate MQTT events. Includes AI description only.
+    Sends a Home Assistant mobile notification for Frigate MQTT events
+    with GenAI text. You can choose whether to trigger on alert only,
+    or both alert and detection severity levels.
   domain: automation
   input:
     frigate_cameras:
       name: Frigate Cameras
-      description: Select Frigate camera entities.
+      description: Select one or more Frigate camera entities.
       selector:
         entity:
           domain: camera
@@ -34,10 +35,20 @@ blueprint:
       selector:
         text:
 
+    allow_detections:
+      name: Allow "detection" severity (not just alerts)?
+      description: >
+        If enabled, this will trigger notifications on both "detection" and "alert" events.
+        Disable to only alert on events Frigate considers important ("alert").
+      default: false
+      selector:
+        boolean:
+
 variables:
   frigate_cameras: !input frigate_cameras
   frigate_objects: !input frigate_objects
   mobile_device: !input mobile_device
+  allow_detections: !input allow_detections
 
   selected_cameras: >
     {{ frigate_cameras | map('replace', 'camera.', '') | list }}
@@ -71,7 +82,12 @@ condition:
   - condition: template
     value_template: "{{ object in frigate_objects }}"
   - condition: template
-    value_template: "{{ max_severity == 'alert' }}"
+    value_template: >-
+      {% if allow_detections %}
+        {{ max_severity in ['alert', 'detection'] }}
+      {% else %}
+        {{ max_severity == 'alert' }}
+      {% endif %}
 
 action:
   - service: notify.mobile_app_{{ mobile_device }}
