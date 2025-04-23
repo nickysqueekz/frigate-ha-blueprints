@@ -1,9 +1,8 @@
 blueprint:
-  name: Frigate MQTT Alert (GenAI Only, Selectable Severity)
+  name: Frigate MQTT Alert with GenAI to HA
   description: >
-    Sends a Home Assistant mobile notification for Frigate MQTT events
-    with GenAI text. You can choose whether to trigger on alert only,
-    or both alert and detection severity levels.
+    Sends Frigate MQTT AI event notifications (with GenAI text) to HA mobile app.
+    Choose cameras and object types to alert on.
   domain: automation
   input:
     frigate_cameras:
@@ -30,16 +29,16 @@ blueprint:
             - package
 
     mobile_device:
-      name: Mobile Device (HA Mobile App)
-      description: Your mobile app device name (e.g., motorola_razr_2024)
+      name: Mobile Device
+      description: Name of the target mobile device to receive notifications.
       selector:
-        text:
+        device:
 
     allow_detections:
-      name: Allow "detection" severity (not just alerts)?
+      name: Include Lower Severity Events (Detection/None)
       description: >
-        If enabled, this will trigger notifications on both "detection" and "alert" events.
-        Disable to only alert on events Frigate considers important ("alert").
+        If enabled, will send notifications for lower-severity events (max_severity: detection or null).
+        If disabled, only alerts (max_severity: alert) will be notified.
       default: false
       selector:
         boolean:
@@ -55,15 +54,14 @@ variables:
 
   payload: "{{ trigger.payload_json }}"
   event_type: "{{ payload.type }}"
-  event_id: "{{ (payload.after.id if payload.after is defined else payload.id) | default('') }}"
-  camera: "{{ (payload.after.camera if payload.after is defined else payload.camera) | default('') }}"
-  object: "{{ (payload.after.label if payload.after is defined else payload.label) | lower | default('') }}"
-  max_severity: "{{ (payload.after.max_severity if payload.after is defined else payload.max_severity) | default('detection') }}"
+  event_id: "{{ payload.after.id }}"
+  camera: "{{ payload.after.camera }}"
+  object: "{{ payload.after.label | lower }}"
+  max_severity: "{{ payload.after.max_severity | default('none') }}"
   ai_description: >
-    {% if event_type == 'description' and payload.description is defined %}
-      {{ payload.description }}
-    {% elif payload.after is defined and payload.after.sub_label is defined %}
-      {{ payload.after.sub_label }}
+    {% set desc = payload.after.sub_label %}
+    {% if desc %}
+      {{ desc }}
     {% else %}
       {{ object | title }} detected
     {% endif %}
@@ -71,32 +69,30 @@ variables:
 trigger:
   - platform: mqtt
     topic: frigate/events
-  - platform: mqtt
-    topic: frigate/tracked_object_update
 
 condition:
   - condition: template
     value_template: "{{ event_type in ['new', 'update', 'description'] }}"
+
   - condition: template
     value_template: "{{ camera in selected_cameras }}"
+
   - condition: template
     value_template: "{{ object in frigate_objects }}"
+
   - condition: template
-    value_template: >-
-      {% if allow_detections %}
-        {{ max_severity in ['alert', 'detection'] }}
-      {% else %}
-        {{ max_severity == 'alert' }}
-      {% endif %}
+    value_template: >
+      {{
+        (max_severity == 'alert') or
+        (allow_detections and (max_severity == 'detection' or max_severity == 'none'))
+      }}
 
 action:
   - service: notify.mobile_app_{{ mobile_device }}
     data:
       message: "{{ ai_description }}"
-      title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
+      title: "Frigate: {{ object | title }} on {{ camera | replace('_', ' ') | title }}"
       data:
-        tag: "frigate_{{ event_id }}"
-        persistent: true
         ttl: 0
         priority: high
 
