@@ -1,14 +1,13 @@
 blueprint:
-  name: Frigate MQTT Alert with GenAI to HA Mobile App
+  name: Frigate MQTT Alert (GenAI Only, No Image)
   description: >
-    Sends Frigate event notifications to Home Assistant mobile devices.
-    Includes GenAI text if available, snapshot images if available,
-    and action buttons for viewing both clip and snapshot.
+    Sends a text-only Home Assistant mobile notification
+    from Frigate MQTT events. Includes AI description only.
   domain: automation
   input:
     frigate_cameras:
       name: Frigate Cameras
-      description: Select one or more Frigate camera entities.
+      description: Select Frigate camera entities.
       selector:
         entity:
           domain: camera
@@ -31,7 +30,7 @@ blueprint:
 
     mobile_device:
       name: Mobile Device (HA Mobile App)
-      description: Mobile device name for notifications (e.g., pixel_8, motorola_razr_2024)
+      description: Your mobile app device name (e.g., motorola_razr_2024)
       selector:
         text:
 
@@ -57,13 +56,6 @@ variables:
     {% else %}
       {{ object | title }} detected
     {% endif %}
-  snapshot_url: >
-    {% if (payload.after is defined and payload.after.has_snapshot) or (payload.has_snapshot is defined and payload.has_snapshot) %}
-      http://10.10.10.81:5000/api/events/{{ event_id }}/snapshot.jpg
-    {% else %}
-      ""
-    {% endif %}
-  clip_url: "http://10.10.10.81:5000/api/events/{{ event_id }}/clip.mp4"
 
 trigger:
   - platform: mqtt
@@ -88,20 +80,9 @@ action:
       title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
       data:
         tag: "frigate_{{ event_id }}"
-        notification_icon: mdi:cctv
+        persistent: true
         ttl: 0
         priority: high
-        channel: Frigate
-        persistent: true
-        update: true
-        image: "{{ snapshot_url if snapshot_url else '' }}"
-        actions:
-          - action: URI
-            title: "View Clip"
-            uri: "{{ clip_url }}"
-          - action: URI
-            title: "View Snapshot"
-            uri: "{{ snapshot_url }}"
 
 mode: queued
 max: 10
