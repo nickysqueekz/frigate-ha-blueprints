@@ -90,23 +90,22 @@ condition:
       {% endif %}
 
 action:
+  - service: notify.mobile_app_{{ mobile_device }}
+    data:
+      message: "{{ ai_description }}"
+      title: "Frigate: {{ object | title }} detected on {{ camera | replace('_', ' ') | title }}"
+      data:
+        tag: "frigate_{{ event_id }}"
+        persistent: true
+        ttl: 0
+        priority: high
+
   - service: system_log.write
     data:
       message: >
-        [FRIGATE DEBUG]
-        Event Type: {{ event_type }}
-        Camera: {{ camera }}
-        Object: {{ object }}
-        Severity: {{ max_severity }}
-        Event ID: {{ event_id }}
-        Description: {{ ai_description }}
+        [FRIGATE DEBUG] Notification sent to mobile_app_{{ mobile_device }}
+        | Camera: {{ camera }} | Object: {{ object }} | Severity: {{ max_severity }} | Event ID: {{ event_id }}
       level: info
-
-  - service: persistent_notification.create
-    data:
-      title: "Frigate Triggered"
-      message: >
-        Camera: {{ camera }} | Object: {{ object }} | Severity: {{ max_severity }} | Description: {{ ai_description }}
 
 mode: queued
 max: 10
