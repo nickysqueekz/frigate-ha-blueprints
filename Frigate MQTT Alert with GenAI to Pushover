@@ -1,8 +1,9 @@
 blueprint:
-  name: Frigate MQTT Alert with GenAI to HA
+  name: Frigate MQTT Alert (GenAI Only, Selectable Severity)
   description: >
-    Sends Frigate MQTT AI event notifications (with GenAI text) to HA mobile app.
-    Choose cameras and object types to alert on.
+    Sends a Home Assistant mobile notification for Frigate MQTT events
+    with GenAI text. You can choose whether to trigger on alert only,
+    or both alert and detection severity levels.
   domain: automation
   input:
     frigate_cameras:
@@ -29,16 +30,16 @@ blueprint:
             - package
 
     mobile_device:
-      name: Mobile Device
-      description: Name of the target mobile device to receive notifications.
+      name: Mobile Device (HA Mobile App)
+      description: Your mobile app device name (e.g., motorola_razr_2024)
       selector:
-        device:
+        text:
 
     allow_detections:
-      name: Include Lower Severity Events (Detection/None)
+      name: Allow "detection" severity (not just alerts)?
       description: >
-        If enabled, will send notifications for lower-severity events (max_severity: detection or null).
-        If disabled, only alerts (max_severity: alert) will be notified.
+        If enabled, this will trigger notifications on both "detection" and "alert" events.
+        Disable to only alert on events Frigate considers important ("alert").
       default: false
       selector:
         boolean:
@@ -54,14 +55,15 @@ variables:
 
   payload: "{{ trigger.payload_json }}"
   event_type: "{{ payload.type }}"
-  event_id: "{{ payload.after.id }}"
-  camera: "{{ payload.after.camera }}"
-  object: "{{ payload.after.label | lower }}"
-  max_severity: "{{ payload.after.max_severity | default('none') }}"
+  event_id: "{{ (payload.after.id if payload.after is defined else payload.id) | default('') }}"
+  camera: "{{ (payload.after.camera if payload.after is defined else payload.camera) | default('') }}"
+  object: "{{ (payload.after.label if payload.after is defined else payload.label) | lower | default('') }}"
+  max_severity: "{{ (payload.after.max_severity if payload.after is defined else payload.max_severity) | default('detection') }}"
   ai_description: >
-    {% set desc = payload.after.sub_label %}
-    {% if desc %}
-      {{ desc }}
+    {% if event_type == 'description' and payload.description is defined %}
+      {{ payload.description }}
+    {% elif payload.after is defined and payload.after.sub_label is defined %}
+      {{ payload.after.sub_label }}
     {% else %}
       {{ object | title }} detected
     {% endif %}
@@ -69,32 +71,42 @@ variables:
 trigger:
   - platform: mqtt
     topic: frigate/events
+  - platform: mqtt
+    topic: frigate/tracked_object_update
 
 condition:
   - condition: template
     value_template: "{{ event_type in ['new', 'update', 'description'] }}"
-
   - condition: template
     value_template: "{{ camera in selected_cameras }}"
-
   - condition: template
     value_template: "{{ object in frigate_objects }}"
-
   - condition: template
-    value_template: >
-      {{
-        (max_severity == 'alert') or
-        (allow_detections and (max_severity == 'detection' or max_severity == 'none'))
-      }}
+    value_template: >-
+      {% if allow_detections %}
+        {{ max_severity in ['alert', 'detection'] }}
+      {% else %}
+        {{ max_severity == 'alert' }}
+      {% endif %}
 
 action:
-  - service: notify.mobile_app_{{ mobile_device }}
+  - service: system_log.write
     data:
-      message: "{{ ai_description }}"
-      title: "Frigate: {{ object | title }} on {{ camera | replace('_', ' ') | title }}"
-      data:
-        ttl: 0
-        priority: high
+      message: >
+        [FRIGATE DEBUG]
+        Event Type: {{ event_type }}
+        Camera: {{ camera }}
+        Object: {{ object }}
+        Severity: {{ max_severity }}
+        Event ID: {{ event_id }}
+        Description: {{ ai_description }}
+      level: info
+
+  - service: persistent_notification.create
+    data:
+      title: "Frigate Triggered"
+      message: >
+        Camera: {{ camera }} | Object: {{ object }} | Severity: {{ max_severity }} | Description: {{ ai_description }}
 
 mode: queued
 max: 10
