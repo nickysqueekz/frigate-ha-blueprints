@@ -1,12 +1,15 @@
 blueprint:
-  name: Frigate Basic Notification (Mobile)
+  name: Frigate MQTT Alert - Basic Notification (v0.2)
   description: >
-    Sends a Home Assistant mobile notification with snapshot and clip links
-    when Frigate detects selected objects on selected cameras.
+    Sends a Home Assistant mobile notification for Frigate MQTT events
+    including snapshot and clip. Uses selected cameras/objects.
+    This version includes improved camera matching and debug logging.
   domain: automation
+  version: 1.1
   input:
     frigate_cameras:
       name: Frigate Cameras
+      description: Select one or more Frigate camera entities.
       selector:
         entity:
           domain: camera
@@ -15,6 +18,7 @@ blueprint:
 
     frigate_objects:
       name: Objects to Alert
+      description: Select object types to trigger notifications.
       default: []
       selector:
         select:
@@ -27,7 +31,8 @@ blueprint:
             - package
 
     mobile_device:
-      name: Mobile Device
+      name: Mobile Device (HA Mobile App)
+      description: Your mobile app device name (e.g., motorola_razr_2024)
       selector:
         text:
 
@@ -35,7 +40,7 @@ variables:
   payload: "{{ trigger.payload_json }}"
   event_type: "{{ payload.type }}"
   event_id: "{{ payload.after.id }}"
-  camera: "{{ payload.after.camera }}"
+  camera: "{{ payload.after.camera | regex_replace('^camera\\.', '') }}"
   object: "{{ payload.after.label }}"
   selected_cameras: >
     {{ iif(frigate_cameras is string, [frigate_cameras], frigate_cameras) | map('replace', 'camera.', '') | list }}
@@ -55,6 +60,16 @@ condition:
     value_template: "{{ object in frigate_objects }}"
 
 action:
+  - service: system_log.write
+    data:
+      level: warning
+      message: >
+        [FRIGATE DEBUG] Event: {{ event_type }} |
+        Camera: {{ camera }} |
+        Object: {{ object }} |
+        Severity: {{ payload.after.max_severity }} |
+        Selected Cameras: {{ selected_cameras }}
+
   - service: notify.mobile_app_{{ mobile_device }}
     data:
       message: >
