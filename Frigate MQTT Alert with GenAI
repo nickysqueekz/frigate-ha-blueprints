@@ -5,7 +5,6 @@ blueprint:
     including snapshot and clip. Uses selected cameras/objects.
     This version includes improved camera matching and debug logging.
   domain: automation
-  version: 1.1
   input:
     frigate_cameras:
       name: Frigate Cameras
