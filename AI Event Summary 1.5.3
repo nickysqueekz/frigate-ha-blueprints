@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary NR (v1.5.1) Dual Notify Selector
+  name: AI Event Summary NR (v1.5.3) Dual Notify Selector
   author: valentinfrlch + nr + customized dual notify
   homeassistant:
     min_version: 2024.10.0
@@ -532,16 +532,15 @@ max_exceeded: silent
 mode: single
 
 triggers:
-  - trigger:
-      entity_id: !input camera_entities
-      to: !input trigger_state
+  - platform: state
+    entity_id: !input camera_entities
+    to: !input trigger_state
     id: camera_trigger
-    platform: state
-  - trigger:
-      entity_id: !input motion_sensors
-      to: 'on'
+
+  - platform: state
+    entity_id: !input motion_sensors
+    to: 'on'
     id: motion_sensor_trigger
-    platform: state
 
 condition:
   - condition: and
