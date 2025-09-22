@@ -1,10 +1,11 @@
 blueprint:
   name: AI Event Summary (Telegram v1.5.1)
-  author: valentinfrlch (modified for Telegram)
+  author: valentinfrlch (patched for Telegram notifications)
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI-powered summaries for security camera events. Sends a notification to Telegram with a preview, updated when the AI summary is available.
+    AI-powered summaries for security camera events. Sends a notification to Telegram
+    with a preview, updated when the AI summary is available.
   domain: automation
   input:
     run_conditions:
@@ -143,7 +144,7 @@ blueprint:
       input:
         telegram_notify_service:
           name: Telegram Notify Service
-          description: The correct notify.telegram_* entity. Example: notify.telegram_bot_8415182403_7882720724
+          description: "The correct notify.telegram_* entity. Example: notify.telegram_bot_8415182403_7882720724"
           selector:
             entity:
               integration: telegram_bot
@@ -258,9 +259,11 @@ action:
       service: "{{ telegram_notify_service }}"
       data:
         message: "{{ response.title }}\n\n{{ response.response_text }}"
-        data:
+        data: >
           {% if response.key_frame is defined and response.key_frame|length > 0 %}
-          image: "{{ response.key_frame }}"
+          { "image": "{{ response.key_frame }}" }
+          {% else %}
+          {}
           {% endif %}
 
 - choose: []
