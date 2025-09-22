@@ -1,11 +1,11 @@
 blueprint:
   name: AI Event Summary (Telegram v1.5.1)
-  author: valentinfrlch (modified by user for Telegram)
+  author: valentinfrlch (modified for Telegram)
   homeassistant:
     min_version: 2024.10.0
-  description: 'AI-powered summaries for security camera events. Sends a notification to Telegram with a preview that updates when the AI summary is available.'
+  description: >
+    AI-powered summaries for security camera events. Sends a notification to Telegram with a preview, updated when the AI summary is available.
   domain: automation
-  source_url: https://github.com/nickysqueekz/frigate-ha-blueprints/raw/refs/heads/telegram-only/AI%20Event%20Summary
   input:
     run_conditions:
       name: Run Conditions
@@ -33,8 +33,8 @@ blueprint:
             entity:
               multiple: true
               filter:
-              - domain:
-                - camera
+                - domain:
+                    - camera
               reorder: false
         trigger_state:
           name: Trigger State
@@ -52,8 +52,8 @@ blueprint:
             entity:
               multiple: true
               filter:
-              - domain:
-                - binary_sensor
+                - domain:
+                    - binary_sensor
               reorder: false
         duration:
           name: Duration
@@ -96,7 +96,8 @@ blueprint:
         message:
           name: Prompt
           description: Model prompt for the video_analyzer action
-          default: 'Summarize the events based on a series of images captured at short intervals. Focus only on moving subjects such as people, vehicles, and other active elements. Ignore static objects and scenery. Provide a clear and concise account of movements and interactions. Do not mention or imply the existence of images—present the information as if directly observing the events. If no movement is detected, respond with: ''No activity observed.'''
+          default: >
+            Summarize the events based on a series of images captured at short intervals. Focus only on moving subjects such as people, vehicles, and other active elements. Ignore static objects and scenery. Provide a clear and concise account of movements and interactions. Do not mention or imply the existence of images—present the information as if directly observing the events. If no movement is detected, respond with: 'No activity observed.'
           selector:
             text:
               multiline: true
@@ -140,16 +141,16 @@ blueprint:
       icon: mdi:bell
       collapsed: true
       input:
-        telegram_chat_id:
-          name: Telegram Chat ID
-          description: Chat ID to send notifications. Single or list. No secrets allowed.
-          default: ""
+        telegram_notify_service:
+          name: Telegram Notify Service
+          description: The correct notify.telegram_* entity. Example: notify.telegram_bot_8415182403_7882720724
           selector:
-            text:
-              multiline: false
+            entity:
+              integration: telegram_bot
+              domain: notify
         condition_notify:
           name: Condition to Notify
-          description: Condition to notify.
+          description: Condition for notification.
           default: []
           selector:
             condition: {}
@@ -166,13 +167,13 @@ blueprint:
               step: 1.0
         file_path:
           name: Snapshot Path
-          description: The path to the snapshot file to send as an image.
+          description: The path to the snapshot file for Telegram image.
           default: /media/snapshots/{{ camera_file_path }}/last_motion.jpg
           selector:
             text:
               multiline: false
         tap_navigate:
-          name: Tap Navigate
+          name: Tap Navigate (info only)
           default: /lovelace/0
           selector:
             text:
@@ -198,10 +199,10 @@ blueprint:
             action: {}
 
 variables:
-  telegram_chat_id: !input telegram_chat_id
+  telegram_notify_service: !input telegram_notify_service
   camera_entities_list: !input camera_entities
   motion_sensors_list: !input motion_sensors
-  camera_entity: "{% if motion_sensors_list and not trigger.entity_id.startswith('camera.') %}  {% set index = motion_sensors_list.index(trigger.entity_id) %}    {{ camera_entities_list[index] }}{% else %}  {{ trigger.entity_id }}{% endif %}"
+  camera_entity: "{% if motion_sensors_list and not trigger.entity_id.startswith('camera.') %}{% set index = motion_sensors_list.index(trigger.entity_id) %}{{ camera_entities_list[index] }}{% else %}{{ trigger.entity_id }}{% endif %}"
   tag: "{{ camera_entity + int(as_timestamp(now()))|string }}"
   label: Motion detected
   camera_message: '{{ camera_entity.replace("camera.", "").replace("_", " ")|capitalize }}'
@@ -213,15 +214,16 @@ variables:
 max_exceeded: silent
 mode: single
 
-triggers:
-- trigger: state
+trigger:
+- platform: state
   entity_id: !input camera_entities
   to: !input trigger_state
   id: camera_trigger
-- trigger: state
+- platform: state
   entity_id: !input motion_sensors
   to: 'on'
   id: motion_sensor_trigger
+
 condition:
 - condition: and
   conditions: !input run_conditions
@@ -230,7 +232,7 @@ action:
 - alias: Analyze event
   action: llmvision.stream_analyzer
   data:
-    image_entity: '{{[camera_entity]}}'
+    image_entity: '{{ [camera_entity] }}'
     duration: !input duration
     provider: !input provider
     model: !input model
@@ -245,32 +247,21 @@ action:
     max_tokens: !input max_tokens
   response_variable: response
 
+- delay:
+    seconds: !input delay_notification
+
 - if:
-  - condition: template
-    value_template: '{{ telegram_chat_id|length > 0 }}'
+    - condition: template
+      value_template: "{{ telegram_notify_service | length > 0 }}"
   then:
-  - choose:
-    - conditions:
-      - condition: template
-        value_template: "{{ response.key_frame is defined and response.key_frame|length > 0 }}"
-      sequence:
-      - alias: Send photo summary (with snapshot) to Telegram
-        service: telegram_bot.send_photo
+    - alias: Send Telegram message with/without image
+      service: "{{ telegram_notify_service }}"
+      data:
+        message: "{{ response.title }}\n\n{{ response.response_text }}"
         data:
-          chat_id: "{{ telegram_chat_id }}"
-          caption: "{{ response.title }}\n\n{{ response.response_text }}"
-          parse_mode: html
-          url: "{{ response.key_frame }}"
-    - conditions:
-      - condition: template
-        value_template: "{{ response.key_frame is not defined or response.key_frame|length == 0 }}"
-      sequence:
-      - alias: Send text summary (without snapshot) to Telegram
-        service: telegram_bot.send_message
-        data:
-          chat_id: "{{ telegram_chat_id }}"
-          message: "{{ response.title }}\n\n{{ response.response_text }}"
-          parse_mode: html
-  - delay: !input cooldown
+          {% if response.key_frame is defined and response.key_frame|length > 0 %}
+          image: "{{ response.key_frame }}"
+          {% endif %}
+
 - choose: []
   default: !input additional_actions
