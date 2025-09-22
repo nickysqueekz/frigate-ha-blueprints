@@ -144,7 +144,7 @@ blueprint:
       input:
         telegram_config_entry_id:
           name: Telegram Bot Config Entry ID
-          description: The config entry id of your Telegram bot integration (e.g., telegram_bot_8415182403_7882720724)
+          description: "The config entry id of your Telegram bot integration (e.g., telegram_bot_8415182403_7882720724)"
           selector:
             text:
               multiline: false
@@ -208,7 +208,7 @@ variables:
   telegram_target: !input telegram_target
   camera_entities_list: !input camera_entities
   motion_sensors_list: !input motion_sensors
-  camera_entity: >-
+  camera_entity: >
     {% if motion_sensors_list and not trigger.entity_id.startswith('camera.') %}
       {% set index = motion_sensors_list.index(trigger.entity_id) %}
       {{ camera_entities_list[index] }}
@@ -283,7 +283,8 @@ action:
                   url: "{{ response.key_frame }}"
                   caption: "{{ response.title }}\n\n{{ response.response_text }}"
                   parse_mode: html
-          - sequence:
+          - conditions: []   # Added this empty conditions key to fix the error
+            sequence:
               - service: telegram_bot.send_message
                 data:
                   config_entry_id: "{{ telegram_config_entry_id }}"
