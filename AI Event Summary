@@ -1,16 +1,16 @@
 blueprint:
-  name: AI Event Summary (Telegram Bot v1.6)
-  author: valentinfrlch (updated for official telegram_bot integration)
+  name: AI Event Summary (Telegram Bot v1.6 Fixed)
+  author: valentinfrlch (fully fixed for telegram_bot integration, no notify.* calls)
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI-powered summaries for security camera events. Sends notifications to Telegram chat
-    via telegram_bot integration using send_message and send_photo actions.
+    AI-powered summaries for security camera events that send notifications strictly via telegram_bot send_message/send_photo services.  
+    Removed all deprecated notify.telegram_bot_* calls to fix service errors.
   domain: automation
   input:
     run_conditions:
       name: Run Conditions
-      description: All conditions must be true in order for the blueprint to run.
+      description: All conditions must be true for the blueprint to run.
       default: []
       selector:
         condition: {}
@@ -23,7 +23,7 @@ blueprint:
         duration: {}
     camera_sensor_section:
       name: Camera & Sensor Settings
-      description: Settings for the camera and sensor entities.
+      description: Settings for the cameras and motion sensors.
       icon: mdi:camera
       input:
         camera_entities:
@@ -39,15 +39,15 @@ blueprint:
               reorder: false
         trigger_state:
           name: Trigger State
-          description: Automation starts when one of your cameras changes to this state.
+          description: State to trigger on for camera entities.
           default: recording
           selector:
             text:
               multiline: false
               multiple: false
         motion_sensors:
-          name: Motion Sensor
-          description: Set if your cameras don't change state (Frigate).
+          name: Motion Sensors
+          description: Motion sensors linked to cameras.
           default: []
           selector:
             entity:
@@ -58,7 +58,7 @@ blueprint:
               reorder: false
         duration:
           name: Duration
-          description: Duration to record for analysis (seconds).
+          description: Recording duration for analysis in seconds.
           default: 5
           selector:
             number:
@@ -68,7 +68,7 @@ blueprint:
               mode: slider
         max_frames:
           name: Max Frames
-          description: How many frames to analyze.
+          description: Number of frames to analyze.
           default: 3
           selector:
             number:
@@ -78,34 +78,35 @@ blueprint:
               mode: slider
     ai_section:
       name: AI Settings
-      description: AI settings for the analysis.
+      description: AI configuration for analysis.
       icon: mdi:brain
       collapsed: true
       input:
         remember:
           name: Store in Timeline
-          description: Stores this event in Timeline for history and queries.
+          description: Store event in Timeline for queries.
           default: true
           selector:
             boolean: {}
         use_memory:
           name: Use Memory
-          description: Use stored memory info for additional context.
+          description: Use stored memory context.
           default: false
           selector:
             boolean: {}
         message:
-          name: Prompt
-          description: AI prompt for video analyzer.
+          name: AI Prompt
+          description: Prompt for AI video analyzer.
           default: >
-            Summarize the events based on a series of images captured at short intervals. Focus only on moving subjects such as people, vehicles, and other active elements. Ignore static objects and scenery. Provide a clear and concise account of movements and interactions. Do not mention or imply the existence of images—present the information as if directly observing the events. If no movement is detected, respond with: 'No activity observed.'
+            Summarize the events based on images captured at short intervals. Focus on moving subjects only. Ignore static objects and scenery.
+            If no movement detected, reply: 'No activity observed.'
           selector:
             text:
               multiline: true
               multiple: false
         provider:
-          name: Provider
-          description: AI provider.
+          name: AI Provider
+          description: Provider for AI analysis.
           selector:
             config_entry:
               integration: llmvision
@@ -118,7 +119,7 @@ blueprint:
               multiple: false
         target_width:
           name: Target Width
-          description: Image downscale size.
+          description: Downscale image width.
           default: 1280
           selector:
             number:
@@ -127,8 +128,8 @@ blueprint:
               step: 1
               mode: slider
         max_tokens:
-          name: Maximum Tokens
-          description: Max tokens for AI summary.
+          name: Max Tokens
+          description: Maximum tokens for summary.
           default: 20
           selector:
             number:
@@ -138,31 +139,31 @@ blueprint:
               mode: slider
     notification_section:
       name: Notification Settings
-      description: Telegram notification delivery settings.
+      description: Telegram bot notification settings.
       icon: mdi:telegram
       collapsed: true
       input:
         telegram_config_entry_id:
           name: Telegram Bot Config Entry ID
-          description: "The config entry id of your Telegram bot integration (e.g., telegram_bot_8415182403_7882720724)"
+          description: Config entry ID of your Telegram bot integration (e.g. telegram_bot_8415182403_7882720724)
           selector:
             text:
               multiline: false
         telegram_target:
           name: Telegram Target Chat ID(s)
-          description: Single or multiple authorized Telegram chat IDs (e.g., 123456789 or [123456789,987654321])
+          description: Chat ID or list of authorized Telegram chat IDs (e.g. 123456789 or [123456789,987654321])
           selector:
             text:
               multiline: false
         condition_notify:
           name: Condition to Notify
-          description: Condition for sending notification.
+          description: Condition before sending notification.
           default: []
           selector:
             condition: {}
         delay_notification:
           name: Notification Cooldown
-          description: Seconds delay before sending next notification.
+          description: Seconds delay between notifications.
           default: 60
           selector:
             number:
@@ -173,7 +174,7 @@ blueprint:
               step: 1
         file_path:
           name: Snapshot File Path
-          description: Path to snapshot file to send as photo.
+          description: File path to snapshot image, if used.
           default: /media/snapshots/{{ camera_file_path }}/last_motion.jpg
           selector:
             text:
@@ -191,14 +192,14 @@ blueprint:
       collapsed: true
       input:
         important:
-          name: Important (Experimental)
+          name: Important
           description: Use AI classification to filter notifications.
           default: false
           selector:
             boolean: {}
         additional_actions:
-          name: Additional Actions (Experimental)
-          description: Additional actions after AI and notification.
+          name: Additional Actions
+          description: Additional actions to run after analysis and notification.
           default: []
           selector:
             action: {}
@@ -283,7 +284,7 @@ action:
                   url: "{{ response.key_frame }}"
                   caption: "{{ response.title }}\n\n{{ response.response_text }}"
                   parse_mode: html
-          - conditions: []   # Added this empty conditions key to fix the error
+          - conditions: []
             sequence:
               - service: telegram_bot.send_message
                 data:
