@@ -5,7 +5,7 @@ blueprint:
     min_version: 2024.10.0
   description: 'AI-powered summaries for security camera events. Sends a notification to Telegram with a preview that updates when the AI summary is available.'
   domain: automation
-  source_url: https://raw.githubusercontent.com/nickysqueekz/frigate-ha-blueprints/refs/heads/main/blueprints/ai_event_summary.yaml
+  source_url: https://github.com/nickysqueekz/frigate-ha-blueprints/raw/refs/heads/telegram-only/AI%20Event%20Summary
   input:
     run_conditions:
       name: Run Conditions
