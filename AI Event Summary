@@ -256,7 +256,7 @@ variables:
   delay_notification: !input delay_notification
   camera_entities_list: !input camera_entities
   motion_sensors_list: !input motion_sensors
-  camera_entity: "{% if motion_sensors_list and not trigger.entity_id.startswith(\"camera\") %}\n  {% set index = motion_sensors_list.index(trigger.entity_id) %}\n    {{ camera_entities_list[index] }}\n{% else %}\n  {{ trigger.entity_id }}\n{% endif %}\n"
+  camera_entity: "{% if motion_sensors_list and trigger is defined and not trigger.entity_id.startswith(\"camera\") %}\n  {% set index = motion_sensors_list.index(trigger.entity_id) %}\n    {{ camera_entities_list[index] }}\n{% else %}\n  {{ camera_entities_list[0] if camera_entities_list else 'camera.unknown' }}\n{% endif %}\n"
   tag: '{{ camera_entity + int(as_timestamp(now()))|string }}'
   label: Motion detected
   camera_message: '{{ camera_entity.replace("camera.", "").replace("_", " ")|capitalize }}'
@@ -266,6 +266,7 @@ variables:
   camera_file_path: '{{ camera_entity_snapshot.replace("camera.", "")}}'
   file_path: !input file_path
   notification_time: !input notification_time
+  is_manual_trigger: "{{ trigger is not defined or trigger.entity_id is not defined }}"
 
 max_exceeded: silent
 mode: single
@@ -285,12 +286,16 @@ condition:
   conditions: !input run_conditions
 
 action:
-# Send Telegram message when manually triggered via "Run actions" button
-- action: telegram_bot.send_message
-  data:
-    config_entry_id: !input telegram_config_entry_id
-    target: !input telegram_target
-    message: "🔧 Manual automation trigger activated for {{ camera }} camera monitoring at {{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+# Send Telegram message when manually triggered (no trigger context)
+- if:
+  - condition: template
+    value_template: "{{ is_manual_trigger }}"
+  then:
+  - action: telegram_bot.send_message
+    data:
+      config_entry_id: !input telegram_config_entry_id
+      target: !input telegram_target
+      message: "🔧 Manual automation trigger activated for {{ camera }} camera monitoring at {{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
 
 - choose:
   - conditions:
