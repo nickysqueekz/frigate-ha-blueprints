@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary (Telegram Bot v1.6 Fixed)
-  author: valentinfrlch (fully fixed for telegram_bot integration, no notify.* calls)
+  name: AI Event Summary (Telegram Bot)
+  author: Forked and debugged for HA telegram_bot only
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI-powered summaries for security camera events that send notifications strictly via telegram_bot send_message/send_photo services.  
-    Removed all deprecated notify.telegram_bot_* calls to fix service errors.
+    AI-powered summaries for security camera events, strictly using Home Assistant's official telegram_bot integration.
+    No legacy notify.* calls; images and text handled per Telegram bot requirements.
   domain: automation
   input:
     run_conditions:
@@ -23,7 +23,7 @@ blueprint:
         duration: {}
     camera_sensor_section:
       name: Camera & Sensor Settings
-      description: Settings for the cameras and motion sensors.
+      description: Camera and linked motion sensor settings.
       icon: mdi:camera
       input:
         camera_entities:
@@ -39,7 +39,7 @@ blueprint:
               reorder: false
         trigger_state:
           name: Trigger State
-          description: State to trigger on for camera entities.
+          description: Camera state to trigger event.
           default: recording
           selector:
             text:
@@ -47,7 +47,7 @@ blueprint:
               multiple: false
         motion_sensors:
           name: Motion Sensors
-          description: Motion sensors linked to cameras.
+          description: Linked binary_sensor motion entities.
           default: []
           selector:
             entity:
@@ -58,14 +58,13 @@ blueprint:
               reorder: false
         duration:
           name: Duration
-          description: Recording duration for analysis in seconds.
+          description: Seconds to record for analysis.
           default: 5
           selector:
             number:
               min: 1
               max: 60
               step: 1
-              mode: slider
         max_frames:
           name: Max Frames
           description: Number of frames to analyze.
@@ -75,38 +74,37 @@ blueprint:
               min: 1
               max: 60
               step: 1
-              mode: slider
     ai_section:
       name: AI Settings
-      description: AI configuration for analysis.
+      description: AI analysis settings.
       icon: mdi:brain
       collapsed: true
       input:
         remember:
           name: Store in Timeline
-          description: Store event in Timeline for queries.
+          description: Store event data in Timeline for history/queries.
           default: true
           selector:
             boolean: {}
         use_memory:
           name: Use Memory
-          description: Use stored memory context.
+          description: Use memory context for AI.
           default: false
           selector:
             boolean: {}
         message:
           name: AI Prompt
-          description: Prompt for AI video analyzer.
+          description: Prompt to use for AI.
           default: >
-            Summarize the events based on images captured at short intervals. Focus on moving subjects only. Ignore static objects and scenery.
-            If no movement detected, reply: 'No activity observed.'
+            Summarize all moving objects. Ignore static scenery. Use present tense.
+            If no movement, reply: 'No activity observed.'
           selector:
             text:
               multiline: true
               multiple: false
         provider:
           name: AI Provider
-          description: Provider for AI analysis.
+          description: Vision analysis provider.
           selector:
             config_entry:
               integration: llmvision
@@ -116,48 +114,45 @@ blueprint:
           selector:
             text:
               multiline: false
-              multiple: false
         target_width:
           name: Target Width
-          description: Downscale image width.
+          description: Downscale width.
           default: 1280
           selector:
             number:
               min: 512
               max: 3840
               step: 1
-              mode: slider
         max_tokens:
           name: Max Tokens
-          description: Maximum tokens for summary.
+          description: Max tokens for summary.
           default: 20
           selector:
             number:
               min: 1
               max: 300
               step: 1
-              mode: slider
     notification_section:
       name: Notification Settings
-      description: Telegram bot notification settings.
+      description: Telegram bot notification settings—no notify.* calls.
       icon: mdi:telegram
       collapsed: true
       input:
         telegram_config_entry_id:
           name: Telegram Bot Config Entry ID
-          description: Config entry ID of your Telegram bot integration (e.g. telegram_bot_8415182403_7882720724)
+          description: Config entry ID from Telegram Bot (e.g. 01K5Q0YTVD69JC5CD85573RKSE)
           selector:
             text:
               multiline: false
         telegram_target:
           name: Telegram Target Chat ID(s)
-          description: Chat ID or list of authorized Telegram chat IDs (e.g. 123456789 or [123456789,987654321])
+          description: Single ID or list of chat IDs (e.g. 123456789 or [123456789,987654321])
           selector:
             text:
               multiline: false
         condition_notify:
           name: Condition to Notify
-          description: Condition before sending notification.
+          description: Only notify when these conditions are met.
           default: []
           selector:
             condition: {}
@@ -174,32 +169,32 @@ blueprint:
               step: 1
         file_path:
           name: Snapshot File Path
-          description: File path to snapshot image, if used.
+          description: File path for snapshot image, if using local file.
           default: /media/snapshots/{{ camera_file_path }}/last_motion.jpg
           selector:
             text:
               multiline: false
         tap_navigate:
-          name: Tap Navigate (Info Only)
+          name: Tap Navigate (Info only)
           default: /lovelace/0
           selector:
             text:
               multiline: false
     experimental_section:
-      name: Experimental Settings
-      description: Experimental features.
+      name: Experimental features
+      description: Do not rely on for production.
       icon: mdi:brain
       collapsed: true
       input:
         important:
-          name: Important
-          description: Use AI classification to filter notifications.
+          name: Important/AI filter
+          description: Only notify for important events.
           default: false
           selector:
             boolean: {}
         additional_actions:
-          name: Additional Actions
-          description: Additional actions to run after analysis and notification.
+          name: Additional Actions (Experimental)
+          description: Advanced/custom actions after analysis and notifications.
           default: []
           selector:
             action: {}
@@ -217,13 +212,9 @@ variables:
       {{ trigger.entity_id }}
     {% endif %}
   tag: "{{ camera_entity + int(as_timestamp(now())) | string }}"
-  label: Motion detected
-  camera_message: '{{ camera_entity.replace("camera.", "").replace("_", " ") | capitalize }}'
-  camera: '{{ camera_entities_list[0].replace("camera.", "").replace("_", " ") | title }}'
   camera_entity_snapshot: '{{ camera_entities_list[0] }}'
   camera_file_path: '{{ camera_entity_snapshot.replace("camera.", "") }}'
   file_path: !input file_path
-  notification_time: ''
 
 max_exceeded: silent
 mode: single
@@ -243,7 +234,7 @@ condition:
     conditions: !input run_conditions
 
 action:
-  - alias: Analyze event
+  - alias: Analyze camera event with AI
     action: llmvision.stream_analyzer
     data:
       image_entity: '{{ [camera_entity] }}'
@@ -272,16 +263,36 @@ action:
       - choose:
           - conditions:
               - condition: template
-                value_template: "{{ response.key_frame is defined and response.key_frame | length > 0 }}"
+                value_template: >
+                  {{ response.key_frame is defined and response.key_frame and
+                     (response.key_frame.startswith('http') or response.key_frame.startswith('https')) }}
             sequence:
               - service: telegram_bot.send_photo
                 data:
                   config_entry_id: "{{ telegram_config_entry_id }}"
                   target: >-
                     {{
-                      (telegram_target | from_json if telegram_target.startswith('[') else [telegram_target | int])
+                      (telegram_target | from_json if telegram_target.startswith('[')
+                          else [telegram_target | int])
                     }}
                   url: "{{ response.key_frame }}"
+                  caption: "{{ response.title }}\n\n{{ response.response_text }}"
+                  parse_mode: html
+          - conditions:
+              - condition: template
+                value_template: >
+                  {{ response.key_frame is defined and response.key_frame and
+                      response.key_frame.startswith('/') }}
+            sequence:
+              - service: telegram_bot.send_photo
+                data:
+                  config_entry_id: "{{ telegram_config_entry_id }}"
+                  target: >-
+                    {{
+                      (telegram_target | from_json if telegram_target.startswith('[')
+                          else [telegram_target | int])
+                    }}
+                  file: "{{ response.key_frame }}"
                   caption: "{{ response.title }}\n\n{{ response.response_text }}"
                   parse_mode: html
           - conditions: []
@@ -291,7 +302,8 @@ action:
                   config_entry_id: "{{ telegram_config_entry_id }}"
                   target: >-
                     {{
-                      (telegram_target | from_json if telegram_target.startswith('[') else [telegram_target | int])
+                      (telegram_target | from_json if telegram_target.startswith('[')
+                          else [telegram_target | int])
                     }}
                   message: "{{ response.title }}\n\n{{ response.response_text }}"
                   parse_mode: html
