@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (v1.5.2)
+  name: AI Event Summary with Telegram (v1.5.1)
   author: valentinfrlch (modified for Telegram)
   homeassistant:
     min_version: 2024.10.0
@@ -14,8 +14,8 @@ blueprint:
       input:
         telegram_config_entry_id:
           name: Telegram Config Entry ID
-          description: The config entry ID for your Telegram bot (leave empty to use default)
-          default: ""
+          description: The config entry ID for your Telegram bot
+          default: "01K5Q0YTVD69JC5CD85573RKSE"
           selector:
             text:
               multiline: false
@@ -201,15 +201,15 @@ blueprint:
               custom_value: false
         file_path:
           name: File Path for Snapshots
-          description: "The file path to store snapshots for Telegram. Use /config/www/ for accessible path."
-          default: /config/www/snapshots/{{ camera_file_path }}/last_motion.jpg
+          description: "The file path to store snapshots for Telegram. Must be accessible to Home Assistant."
+          default: /media/snapshots/{{ camera_file_path }}/last_motion.jpg
           selector:
             select:
               options:
-              - label: Config WWW Folder (Recommended)
-                value: /config/www/snapshots/{{ camera_file_path }}/last_motion.jpg
               - label: Media Folder
                 value: /media/snapshots/{{ camera_file_path }}/last_motion.jpg
+              - label: Config WWW Folder
+                value: /config/www/snapshots/{{ camera_file_path }}/last_motion.jpg
               custom_value: true
               sort: false
               multiple: false
@@ -267,12 +267,6 @@ variables:
   file_path: !input file_path
   notification_time: !input notification_time
   is_manual_trigger: "{{ trigger is not defined or trigger.entity_id is not defined }}"
-  telegram_data: >
-    {% if telegram_config_entry_id != "" %}
-      {{ {"config_entry_id": telegram_config_entry_id, "target": telegram_target} }}
-    {% else %}
-      {{ {"target": telegram_target} }}
-    {% endif %}
 
 max_exceeded: silent
 mode: single
@@ -298,8 +292,10 @@ action:
     value_template: "{{ is_manual_trigger }}"
   then:
   - action: telegram_bot.send_message
-    data: >
-      {{ telegram_data | combine({"message": "🔧 Manual automation trigger activated for " + camera + " camera monitoring at " + now().strftime('%Y-%m-%d %H:%M:%S')}) }}
+    data:
+      config_entry_id: !input telegram_config_entry_id
+      target: !input telegram_target
+      message: "🔧 Manual automation trigger activated for {{ camera }} camera monitoring at {{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
 
 - choose:
   - conditions:
@@ -341,13 +337,15 @@ action:
             value_template: '{{ notification_delivery == ''Dynamic'' }}'
           sequence:
           - service: camera.snapshot
-            target:
-              entity_id: "{{ camera_entity }}"
+            entity_id: !input camera_entities
             data:
-              filename: "{{ file_path }}"
+              filename: !input file_path
           - action: telegram_bot.send_photo
-            data: >
-              {{ telegram_data | combine({"file": file_path, "caption": label + " " + notification_time + " - " + camera_message + " has detected activity. Analyzing..."}) }}
+            data:
+              config_entry_id: !input telegram_config_entry_id
+              target: !input telegram_target
+              file: !input file_path
+              caption: '{{ label }} {{ notification_time }} - {{camera_message}} has detected activity. Analyzing...'
 
 - alias: Analyze event
   action: llmvision.stream_analyzer
@@ -388,15 +386,21 @@ action:
             value_template: '{{ notification_delivery == ''Dynamic'' }}'
           sequence:
           - action: telegram_bot.send_photo
-            data: >
-              {{ telegram_data | combine({"file": response.key_frame, "caption": label + " " + notification_time + " - " + response.response_text}) }}
+            data:
+              config_entry_id: !input telegram_config_entry_id
+              target: !input telegram_target
+              file: '{{response.key_frame}}'
+              caption: '{{ label }} {{ notification_time }} - {{response.response_text}}'
         - conditions:
           - condition: template
             value_template: '{{ notification_delivery == ''Consolidated'' }}'
           sequence:
           - action: telegram_bot.send_photo
-            data: >
-              {{ telegram_data | combine({"file": response.key_frame, "caption": label + " " + notification_time + " - " + response.response_text}) }}
+            data:
+              config_entry_id: !input telegram_config_entry_id
+              target: !input telegram_target
+              file: '{{response.key_frame}}'
+              caption: '{{ label }} {{ notification_time }} - {{response.response_text}}'
 
 - choose: []
   default: !input additional_actions
