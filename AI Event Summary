@@ -1,112 +1,207 @@
 blueprint:
-  name: AI Event Summary (Telegram Only, Safe Entity with Timestamp v1.9)
-  author: Perplexity AI - added missing input definitions and fixes
+  name: AI Event Summary (Telegram Only, Complete v2.0)
+  author: Perplexity AI - corrected input structure
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI event summaries for camera triggers, with initial timestamp notification followed by analyzed results,
-    exclusively using Home Assistant telegram_bot integration.
+    AI event summaries for camera triggers with timestamp notifications via Telegram Bot integration.
   domain: automation
   input:
     run_conditions:
       name: Run Conditions
-      description: Conditions that must all be true for automation to run.
+      description: All conditions must be true for the blueprint to run.
       default: []
       selector:
         condition: {}
     cooldown:
       name: Cooldown
-      description: Time to wait before next run.
+      description: Time to wait before running automation again.
       default:
         minutes: 10
       selector:
         duration: {}
-    camera_entities:
-      name: Camera Entities
-      selector:
-        entity:
-          domain: camera
-          multiple: true
-    motion_sensors:
-      name: Motion Sensors
-      selector:
-        entity:
-          domain: binary_sensor
-          multiple: true
-    trigger_state:
-      name: Trigger State
-      default: recording
-      selector:
-        text:
-          multiline: false
-    provider:
-      name: LLM Vision Provider
-      selector:
-        config_entry:
-          integration: llmvision
-    model:
-      name: AI Model
-      selector:
-        text:
-          multiline: false
-    duration:
-      name: Duration
-      default: 5
-      selector:
-        number:
-          min: 1
-          max: 60
-          step: 1
-    max_frames:
-      name: Max Frames
-      default: 3
-      selector:
-        number:
-          min: 1
-          max: 60
-          step: 1
-    telegram_config_entry_id:
-      name: Telegram Bot Config Entry ID
-      selector:
-        text:
-          multiline: false
-    telegram_target:
-      name: Telegram Target Chat ID(s)
-      selector:
-        text:
-          multiline: false
-    file_path:
-      name: Snapshot File Path
-      default: /media/snapshots/{{ camera_file_path }}/last_motion.jpg
-      selector:
-        text:
-          multiline: false
-    important:
-      name: Important Filter
-      default: false
-      selector:
-        boolean: {}
-    use_memory:
-      name: Use Memory
-      default: false
-      selector:
-        boolean: {}
-    additional_actions:
-      name: Additional Actions
-      description: Additional actions to run after analysis and notification.
-      default: []
-      selector:
-        action: {}
-    delay_notification:
-      name: Notification Cooldown (seconds)
-      default: 60
-      selector:
-        number:
-          min: 0
-          max: 86400
-          unit_of_measurement: seconds
-          mode: box
-          step: 1
+    camera_sensor_section:
+      name: Camera & Sensor Settings
+      description: Settings for the camera and sensor entities.
+      icon: mdi:camera
+      input:
+        camera_entities:
+          name: Camera Entities
+          description: List of camera entities to monitor.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain:
+                    - camera
+              reorder: false
+        trigger_state:
+          name: Trigger State
+          description: State to trigger on for camera entities.
+          default: recording
+          selector:
+            text:
+              multiline: false
+              multiple: false
+        motion_sensors:
+          name: Motion Sensors
+          description: Motion sensors linked to cameras.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain:
+                    - binary_sensor
+              reorder: false
+        duration:
+          name: Duration
+          description: Recording duration for analysis in seconds.
+          default: 5
+          selector:
+            number:
+              min: 1
+              max: 60
+              step: 1
+              mode: slider
+        max_frames:
+          name: Max Frames
+          description: Number of frames to analyze.
+          default: 3
+          selector:
+            number:
+              min: 1
+              max: 60
+              step: 1
+              mode: slider
+    ai_section:
+      name: AI Settings
+      description: AI configuration for analysis.
+      icon: mdi:brain
+      collapsed: true
+      input:
+        remember:
+          name: Store in Timeline
+          description: Store event in Timeline for queries.
+          default: true
+          selector:
+            boolean: {}
+        use_memory:
+          name: Use Memory
+          description: Use stored memory context.
+          default: false
+          selector:
+            boolean: {}
+        message:
+          name: AI Prompt
+          description: Prompt for AI video analyzer.
+          default: >
+            Summarize the events based on images captured at short intervals. Focus on moving subjects only. Ignore static objects and scenery.
+            If no movement detected, reply: 'No activity observed.'
+          selector:
+            text:
+              multiline: true
+              multiple: false
+        provider:
+          name: AI Provider
+          description: Provider for AI analysis.
+          selector:
+            config_entry:
+              integration: llmvision
+        model:
+          name: Model
+          description: Model to use.
+          selector:
+            text:
+              multiline: false
+              multiple: false
+        target_width:
+          name: Target Width
+          description: Downscale image width.
+          default: 1280
+          selector:
+            number:
+              min: 512
+              max: 3840
+              step: 1
+              mode: slider
+        max_tokens:
+          name: Max Tokens
+          description: Maximum tokens for summary.
+          default: 20
+          selector:
+            number:
+              min: 1
+              max: 300
+              step: 1
+              mode: slider
+        important:
+          name: Important (Experimental)
+          description: Use AI classification to filter notifications.
+          default: false
+          selector:
+            boolean: {}
+    notification_section:
+      name: Notification Settings
+      description: Telegram bot notification settings.
+      icon: mdi:telegram
+      collapsed: true
+      input:
+        telegram_config_entry_id:
+          name: Telegram Bot Config Entry ID
+          description: Config entry ID of your Telegram bot integration (e.g. telegram_bot_8415182403_7882720724)
+          selector:
+            text:
+              multiline: false
+        telegram_target:
+          name: Telegram Target Chat ID(s)
+          description: Chat ID or list of authorized Telegram chat IDs (e.g. 123456789 or [123456789,987654321])
+          selector:
+            text:
+              multiline: false
+        condition_notify:
+          name: Condition to Notify
+          description: Condition before sending notification.
+          default: []
+          selector:
+            condition: {}
+        delay_notification:
+          name: Notification Cooldown
+          description: Seconds delay between notifications.
+          default: 60
+          selector:
+            number:
+              min: 0
+              max: 86400
+              unit_of_measurement: seconds
+              mode: box
+              step: 1
+        file_path:
+          name: Snapshot File Path
+          description: File path to snapshot image, if used.
+          default: /media/snapshots/{{ camera_file_path }}/last_motion.jpg
+          selector:
+            text:
+              multiline: false
+        tap_navigate:
+          name: Tap Navigate (Info Only)
+          default: /lovelace/0
+          selector:
+            text:
+              multiline: false
+    experimental_section:
+      name: Experimental Settings
+      description: Experimental features.
+      icon: mdi:brain
+      collapsed: true
+      input:
+        additional_actions:
+          name: Additional Actions (Experimental)
+          description: Additional actions to run after analysis and notification.
+          default: []
+          selector:
+            action: {}
 
 variables:
   telegram_config_entry_id: !input telegram_config_entry_id
@@ -129,27 +224,26 @@ variables:
       {{ trigger.entity_id }}
     {% endif %}
   tag: "{{ camera_entity + int(as_timestamp(now())) | string }}"
-  camera_entity_snapshot: >
-    {% if camera_entities_list and camera_entities_list|length > 0 %}
-      {{ camera_entities_list[0] }}
-    {% else %}
-      none
-    {% endif %}
-  camera_file_path: >
-    {% if camera_entity_snapshot != 'none' %}
-      {{ camera_entity_snapshot.replace('camera.', '') }}
-    {% else %}
-      unknown_camera
-    {% endif %}
+  label: Motion detected
+  camera_message: '{{ camera_entity.replace("camera.", "").replace("_", " ") | capitalize }}'
+  camera: '{{ camera_entities_list[0].replace("camera.", "").replace("_", " ") | title }}'
+  camera_entity_snapshot: '{{ camera_entities_list[0] }}'
+  camera_file_path: '{{ camera_entity_snapshot.replace("camera.", "") }}'
   file_path: !input file_path
+  notification_time: ''
+
+max_exceeded: silent
+mode: single
 
 trigger:
   - platform: state
     entity_id: !input camera_entities
     to: !input trigger_state
+    id: camera_trigger
   - platform: state
     entity_id: !input motion_sensors
     to: 'on'
+    id: motion_sensor_trigger
 
 condition:
   - condition: and
@@ -172,23 +266,20 @@ action:
   - alias: Analyze event with LLM
     action: llmvision.stream_analyzer
     data:
-      image_entity: >
-        {% if camera_entity != 'none' %}{{ [camera_entity] }}{% else %}[] {% endif %}
+      image_entity: '{{ [camera_entity] }}'
       duration: !input duration
       provider: !input provider
       model: !input model
-      message: >
-        Summarize the event focusing on moving subjects only, ignoring static objects.
-        If none, reply: 'No activity observed.'
+      message: !input message
       use_memory: !input use_memory
+      remember: !input remember
       important: !input important
-      remember: false
       expose_images: true
       generate_title: true
       include_filename: true
       max_frames: !input max_frames
-      target_width: 1280
-      max_tokens: 20
+      target_width: !input target_width
+      max_tokens: !input max_tokens
     response_variable: response
 
   # 3) Wait for cooldown before sending further notifications
@@ -199,13 +290,13 @@ action:
   - if:
       - condition: template
         value_template: >
-          {{ telegram_config_entry_id != '' and telegram_target != '' }}
+          {{ telegram_config_entry_id | length > 0 and telegram_target | length > 0 }}
     then:
       - choose:
           - conditions:
               - condition: template
                 value_template: >
-                  {{ response.key_frame is defined and response.key_frame and
+                  {{ response.key_frame is defined and response.key_frame | length > 0 and
                      (response.key_frame.startswith('http://') or response.key_frame.startswith('https://')) }}
             sequence:
               - service: telegram_bot.send_photo
@@ -222,7 +313,8 @@ action:
           - conditions:
               - condition: template
                 value_template: >
-                  {{ response.key_frame is defined and response.key_frame and response.key_frame.startswith('/') }}
+                  {{ response.key_frame is defined and response.key_frame | length > 0 and
+                     response.key_frame.startswith('/') }}
             sequence:
               - service: telegram_bot.send_photo
                 data:
@@ -250,6 +342,3 @@ action:
 
   - choose: []
     default: !input additional_actions
-
-max_exceeded: silent
-mode: single
