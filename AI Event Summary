@@ -279,28 +279,18 @@ triggers:
   entity_id: !input motion_sensors
   to: 'on'
   id: motion_sensor_trigger
-- trigger: event
-  event_type: automation_trigger
-  event_data:
-    entity_id: "{{ this.entity_id }}"
-  id: manual_trigger
 
 condition:
 - condition: and
   conditions: !input run_conditions
 
 action:
-- choose:
-  - conditions:
-    - condition: template
-      value_template: '{{ trigger.id == "manual_trigger" }}'
-    sequence:
-    - action: telegram_bot.send_message
-      data:
-        config_entry_id: !input telegram_config_entry_id
-        target: !input telegram_target
-        message: "Manual automation trigger activated for {{ camera }} camera monitoring."
-        title: "🔧 Manual Trigger"
+# Send Telegram message when manually triggered via "Run actions" button
+- action: telegram_bot.send_message
+  data:
+    config_entry_id: !input telegram_config_entry_id
+    target: !input telegram_target
+    message: "🔧 Manual automation trigger activated for {{ camera }} camera monitoring at {{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
 
 - choose:
   - conditions:
