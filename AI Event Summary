@@ -1,13 +1,26 @@
 blueprint:
-  name: AI Event Summary (Telegram Only, Safe Entity with Timestamp v1.8)
-  author: Perplexity AI - Added initial timestamp notification before content.
+  name: AI Event Summary (Telegram Only, Safe Entity with Timestamp v1.9)
+  author: Perplexity AI - added missing input definitions and fixes
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI event summaries via Telegram Bot integration with initial timestamp message to Telegram on each trigger,
-    followed by full AI analysis notification with image/text.
+    AI event summaries for camera triggers, with initial timestamp notification followed by analyzed results,
+    exclusively using Home Assistant telegram_bot integration.
   domain: automation
   input:
+    run_conditions:
+      name: Run Conditions
+      description: Conditions that must all be true for automation to run.
+      default: []
+      selector:
+        condition: {}
+    cooldown:
+      name: Cooldown
+      description: Time to wait before next run.
+      default:
+        minutes: 10
+      selector:
+        duration: {}
     camera_entities:
       name: Camera Entities
       selector:
@@ -54,13 +67,11 @@ blueprint:
           step: 1
     telegram_config_entry_id:
       name: Telegram Bot Config Entry ID
-      description: Your Telegram bot config entry ID.
       selector:
         text:
           multiline: false
     telegram_target:
       name: Telegram Target Chat ID(s)
-      description: Single or JSON list of chat IDs.
       selector:
         text:
           multiline: false
@@ -71,7 +82,7 @@ blueprint:
         text:
           multiline: false
     important:
-      name: Important filter
+      name: Important Filter
       default: false
       selector:
         boolean: {}
@@ -80,6 +91,22 @@ blueprint:
       default: false
       selector:
         boolean: {}
+    additional_actions:
+      name: Additional Actions
+      description: Additional actions to run after analysis and notification.
+      default: []
+      selector:
+        action: {}
+    delay_notification:
+      name: Notification Cooldown (seconds)
+      default: 60
+      selector:
+        number:
+          min: 0
+          max: 86400
+          unit_of_measurement: seconds
+          mode: box
+          step: 1
 
 variables:
   telegram_config_entry_id: !input telegram_config_entry_id
@@ -112,7 +139,7 @@ variables:
     {% if camera_entity_snapshot != 'none' %}
       {{ camera_entity_snapshot.replace('camera.', '') }}
     {% else %}
-      'unknown_camera'
+      unknown_camera
     {% endif %}
   file_path: !input file_path
 
@@ -129,7 +156,7 @@ condition:
     conditions: !input run_conditions
 
 action:
-  # Step 1: Send initial timestamp notification instantly when triggered
+  # 1) Send timestamp message immediately
   - service: telegram_bot.send_message
     data:
       config_entry_id: "{{ telegram_config_entry_id }}"
@@ -141,7 +168,7 @@ action:
       message: "Event detected at {{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
       parse_mode: html
 
-  # Step 2: Perform AI analysis
+  # 2) Analyze event
   - alias: Analyze event with LLM
     action: llmvision.stream_analyzer
     data:
@@ -151,8 +178,8 @@ action:
       provider: !input provider
       model: !input model
       message: >
-        Summarize the events based on a series of images. Focus on moving subjects only.
-        Reply 'No activity observed.' if no movement detected.
+        Summarize the event focusing on moving subjects only, ignoring static objects.
+        If none, reply: 'No activity observed.'
       use_memory: !input use_memory
       important: !input important
       remember: false
@@ -164,10 +191,11 @@ action:
       max_tokens: 20
     response_variable: response
 
+  # 3) Wait for cooldown before sending further notifications
   - delay:
       seconds: !input delay_notification
 
-  # Step 3: Send AI analysis result message and photo if available
+  # 4) Send AI analysis results (photo or message)
   - if:
       - condition: template
         value_template: >
@@ -177,9 +205,8 @@ action:
           - conditions:
               - condition: template
                 value_template: >
-                  {{ response.key_frame is defined and response.key_frame
-                     and (response.key_frame.startswith('http://') or
-                          response.key_frame.startswith('https://')) }}
+                  {{ response.key_frame is defined and response.key_frame and
+                     (response.key_frame.startswith('http://') or response.key_frame.startswith('https://')) }}
             sequence:
               - service: telegram_bot.send_photo
                 data:
@@ -187,17 +214,15 @@ action:
                   target: >-
                     {{
                       (telegram_target | from_json if telegram_target.startswith('[')
-                        else [telegram_target | int])
+                         else [telegram_target | int])
                     }}
                   url: "{{ response.key_frame }}"
                   caption: "{{ response.title }}\n\n{{ response.response_text }}"
                   parse_mode: html
-
           - conditions:
               - condition: template
                 value_template: >
-                  {{ response.key_frame is defined and response.key_frame
-                      and response.key_frame.startswith('/') }}
+                  {{ response.key_frame is defined and response.key_frame and response.key_frame.startswith('/') }}
             sequence:
               - service: telegram_bot.send_photo
                 data:
@@ -205,12 +230,11 @@ action:
                   target: >-
                     {{
                       (telegram_target | from_json if telegram_target.startswith('[')
-                        else [telegram_target | int])
+                         else [telegram_target | int])
                     }}
                   file: "{{ response.key_frame }}"
                   caption: "{{ response.title }}\n\n{{ response.response_text }}"
                   parse_mode: html
-
           - conditions: []
             sequence:
               - service: telegram_bot.send_message
@@ -219,7 +243,7 @@ action:
                   target: >-
                     {{
                       (telegram_target | from_json if telegram_target.startswith('[')
-                        else [telegram_target | int])
+                         else [telegram_target | int])
                     }}
                   message: "{{ response.title }}\n\n{{ response.response_text }}"
                   parse_mode: html
