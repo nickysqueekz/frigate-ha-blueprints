@@ -1,143 +1,59 @@
 blueprint:
-  name: AI Event Summary with Telegram (Smart Filtering v1.3)
+  name: AI Event Summary with Telegram (Multi-Camera + Cooldown v1.2)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
-  description: 'AI-powered camera event summaries with smart filtering and configurable analysis.'
+  description: 'AI-powered camera event summaries sent to Telegram with multiple camera support and cooldown.'
   domain: automation
   input:
-    telegram_section:
-      name: Telegram Settings
-      icon: mdi:telegram
-      input:
-        telegram_target:
-          name: Telegram Chat ID
-          description: The chat ID to send notifications to
-          default: "7882720724"
-          selector:
-            text: {}
-    camera_section:
-      name: Camera Settings
-      icon: mdi:camera
-      input:
-        camera_entities:
-          name: Camera Entities
-          description: Camera entities to monitor (can select multiple)
-          selector:
-            entity:
-              multiple: true
-              domain: camera
-        motion_sensors:
-          name: Motion Sensors (Optional)
-          description: Motion sensors for cameras (same order as cameras). Leave empty if cameras change state directly.
-          default: []
-          selector:
-            entity:
-              multiple: true
-              domain: binary_sensor
-        trigger_state:
-          name: Camera Trigger State
-          description: State that triggers the automation for cameras
-          default: "recording"
-          selector:
-            text: {}
-        cooldown_minutes:
-          name: Cooldown (Minutes)
-          description: Wait time before allowing another notification for the same camera
-          default: 5
-          selector:
-            number:
-              min: 0
-              max: 60
-              step: 1
-    ai_section:
-      name: AI Analysis Settings
-      icon: mdi:brain
-      input:
-        provider:
-          name: LLM Provider
-          description: Provider for AI analysis
-          selector:
-            config_entry:
-              integration: llmvision
-        model:
-          name: Model
-          description: Model to use
-          default: "gpt-4o-mini"
-          selector:
-            text: {}
-        duration:
-          name: Analysis Duration (Seconds)
-          description: How long to record for analysis
-          default: 5
-          selector:
-            number:
-              min: 1
-              max: 30
-              step: 1
-        max_frames:
-          name: Maximum Frames
-          description: Maximum number of frames to analyze
-          default: 3
-          selector:
-            number:
-              min: 1
-              max: 15
-              step: 1
-        target_width:
-          name: Image Width
-          description: Resize images to this width (lower = faster, less detail)
-          default: 1280
-          selector:
-            number:
-              min: 512
-              max: 1920
-              step: 64
-        max_tokens:
-          name: Max Response Length
-          description: Maximum length of AI response (higher = more detailed)
-          default: 50
-          selector:
-            number:
-              min: 10
-              max: 200
-              step: 10
-        custom_prompt:
-          name: Analysis Prompt
-          description: Custom prompt for AI analysis (leave empty for default)
-          default: ""
-          selector:
-            text:
-              multiline: true
-    filtering_section:
-      name: Smart Filtering
-      icon: mdi:filter
-      input:
-        importance_filtering:
-          name: Enable Importance Filtering
-          description: Use AI to filter out unimportant events
-          default: true
-          selector:
-            boolean: {}
-        minimum_importance:
-          name: Minimum Importance Level
-          description: Only send notifications for events at or above this level
-          default: "time-sensitive"
-          selector:
-            select:
-              options:
-                - label: "All Events (No Filtering)"
-                  value: "passive"
-                - label: "Time-Sensitive and Critical Only"
-                  value: "time-sensitive"
-                - label: "Critical Events Only"
-                  value: "critical"
-        show_filtered_events:
-          name: Show Filtered Events
-          description: Send a brief message when events are filtered out
-          default: false
-          selector:
-            boolean: {}
+    telegram_target:
+      name: Telegram Chat ID
+      description: The chat ID to send notifications to
+      default: "7882720724"
+      selector:
+        text: {}
+    camera_entities:
+      name: Camera Entities
+      description: Camera entities to monitor (can select multiple)
+      selector:
+        entity:
+          multiple: true
+          domain: camera
+    motion_sensors:
+      name: Motion Sensors (Optional)
+      description: Motion sensors for cameras (same order as cameras). Leave empty if cameras change state directly.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          domain: binary_sensor
+    trigger_state:
+      name: Camera Trigger State
+      description: State that triggers the automation for cameras
+      default: "recording"
+      selector:
+        text: {}
+    cooldown_minutes:
+      name: Cooldown (Minutes)
+      description: Wait time before allowing another notification for the same camera
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 1
+    provider:
+      name: LLM Provider
+      description: Provider for AI analysis
+      selector:
+        config_entry:
+          integration: llmvision
+    model:
+      name: Model
+      description: Model to use
+      default: "gpt-4o-mini"
+      selector:
+        text: {}
 
 variables:
   camera_entities: !input camera_entities
@@ -145,11 +61,6 @@ variables:
   telegram_target: !input telegram_target
   trigger_state: !input trigger_state
   cooldown_minutes: !input cooldown_minutes
-  importance_filtering: !input importance_filtering
-  minimum_importance: !input minimum_importance
-  show_filtered_events: !input show_filtered_events
-  custom_prompt: !input custom_prompt
-  
   is_manual_trigger: "{{ trigger is not defined }}"
   
   # Determine which camera triggered the event
@@ -168,7 +79,7 @@ variables:
   camera_name: '{{ triggered_camera.replace("camera.", "").replace("_", " ").title() }}'
   snapshot_path: '/config/www/snapshots/{{ triggered_camera.replace("camera.", "") }}_snapshot.jpg'
   
-  # Cooldown check
+  # Cooldown check - create a unique key per camera
   cooldown_key: 'last_notification_{{ triggered_camera.replace("camera.", "").replace(".", "_") }}'
   last_notification_time: >
     {% set state_obj = states('input_datetime.' + cooldown_key) %}
@@ -182,28 +93,8 @@ variables:
     {{ not is_manual_trigger and 
        (as_timestamp(now()) - last_notification_time|float) < (cooldown_minutes * 60) }}
 
-  # AI Prompts
-  importance_prompt: >
-    Analyze this security camera image and classify the event importance level.
-    
-    Respond with ONLY one of these words:
-    - "passive" for unimportant events (shadows, leaves, small animals, normal background activity)
-    - "time-sensitive" for notable events (people, vehicles, delivery persons, visitors)  
-    - "critical" for urgent situations (suspicious behavior, potential security threats, emergencies)
-    
-    Consider the context and whether a homeowner would want to be notified about this event.
-
-  analysis_prompt: >
-    {% if custom_prompt != "" %}
-      {{ custom_prompt }}
-    {% else %}
-      Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. 
-      Be specific about what is happening, the number of people/vehicles, their actions, and location in the frame.
-      Keep your response concise but informative.
-    {% endif %}
-
 max_exceeded: silent
-mode: parallel
+mode: parallel  # Allow multiple cameras to trigger simultaneously
 max: 10
 
 trigger:
@@ -235,7 +126,7 @@ action:
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "⏰ {{ camera_name }} cooldown active ({{ cooldown_minutes }}min) - skipping"
+      message: "⏰ {{ camera_name }} cooldown active ({{ cooldown_minutes }}min) - skipping notification"
   - stop: "Cooldown active for {{ camera_name }}"
 
 # Create cooldown helper if it doesn't exist
@@ -246,59 +137,12 @@ action:
     datetime: "{{ now().isoformat() }}"
   continue_on_error: true
 
-# Take snapshot for importance analysis
+# Take snapshot
 - service: camera.snapshot
   target:
     entity_id: "{{ triggered_camera }}"
   data:
     filename: "{{ snapshot_path }}"
-
-# Importance Classification (if enabled)
-- if:
-  - condition: template
-    value_template: "{{ importance_filtering and not is_manual_trigger }}"
-  then:
-  - service: llmvision.image_analyzer
-    data:
-      image_entity: ["{{ triggered_camera }}"]
-      provider: !input provider
-      model: !input model
-      message: "{{ importance_prompt }}"
-      include_filename: false
-      target_width: !input target_width
-      max_tokens: 5
-    response_variable: importance_result
-
-  # Check if event meets minimum importance threshold
-  - if:
-    - condition: template
-      value_template: >
-        {% set detected = importance_result.response_text.lower().strip() %}
-        {% set min_level = minimum_importance %}
-        {% if min_level == "passive" %}
-          {{ true }}
-        {% elif min_level == "time-sensitive" %}
-          {{ detected in ["time-sensitive", "critical"] }}
-        {% elif min_level == "critical" %}
-          {{ detected == "critical" }}
-        {% else %}
-          {{ true }}
-        {% endif %}
-    then:
-    - service: telegram_bot.send_message
-      data:
-        target: !input telegram_target
-        message: "🔍 {{ camera_name }} - Importance: {{ importance_result.response_text.title() }} ✓"
-    else:
-    - if:
-      - condition: template
-        value_template: "{{ show_filtered_events }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "🔇 {{ camera_name }} - Filtered ({{ importance_result.response_text }}) - no alert sent"
-    - stop: "Event filtered - importance too low"
 
 # Send initial notification with snapshot
 - service: telegram_bot.send_photo
@@ -307,20 +151,20 @@ action:
     file: "{{ snapshot_path }}"
     caption: "📹 {{ camera_name }} detected motion - analyzing..."
 
-# Main AI Analysis
+# AI Analysis
 - service: llmvision.stream_analyzer
   data:
     image_entity: ["{{ triggered_camera }}"]
-    duration: !input duration
+    duration: 5
     provider: !input provider
     model: !input model
-    message: "{{ analysis_prompt }}"
-    max_frames: !input max_frames
-    target_width: !input target_width
-    max_tokens: !input max_tokens
+    message: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise."
+    max_frames: 3
+    target_width: 1280
+    max_tokens: 50
   response_variable: analysis
 
-# Send detailed analysis result
+# Send analysis result
 - service: telegram_bot.send_message
   data:
     target: !input telegram_target
