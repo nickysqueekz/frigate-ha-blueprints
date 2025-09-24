@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5.2)
+  name: AI Event Summary with Telegram (Enhanced v1.5.3.1)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
