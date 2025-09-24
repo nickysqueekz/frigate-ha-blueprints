@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5.4)
+  name: AI Event Summary with Telegram (Enhanced v1.5.4.1)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -66,7 +66,7 @@ blueprint:
         show_cooldown_messages:
           name: Show Cooldown Messages
           description: Send a message when events are skipped due to cooldown (for debugging)
-          default: false
+          default: true
           selector:
             boolean: {}
     ai_section:
@@ -274,11 +274,25 @@ variables:
   camera_name: '{{ triggered_camera.replace("camera.", "").replace("_", " ").title() }}'
   snapshot_path: '/config/www/snapshots/{{ triggered_camera.replace("camera.", "") }}_snapshot.jpg'
   
-  # Simplified cooldown using automation attributes
+  # FIXED cooldown logic - per camera tracking
   cooldown_seconds: "{{ cooldown_minutes * 60 }}"
-  last_triggered: "{{ this.attributes.last_triggered if this.attributes.last_triggered else '1970-01-01T00:00:00+00:00' }}"
-  seconds_since_last: "{{ (as_timestamp(now()) - as_timestamp(last_triggered)) | int }}"
-  cooldown_active: "{{ not is_manual_trigger and seconds_since_last < cooldown_seconds }}"
+  automation_last_triggered: "{{ this.attributes.last_triggered }}"
+  
+  # Create per-camera cooldown check using state tracking
+  camera_cooldown_entity: "input_boolean.camera_cooldown_{{ triggered_camera.replace('camera.', '').replace('.', '_') }}"
+  
+  # Check if we're in cooldown for this specific camera
+  cooldown_active: >
+    {% if is_manual_trigger or cooldown_minutes == 0 %}
+      {{ false }}
+    {% else %}
+      {% set last_time = this.attributes.last_triggered %}
+      {% if last_time %}
+        {{ (as_timestamp(now()) - as_timestamp(last_time)) < cooldown_seconds }}
+      {% else %}
+        {{ false }}
+      {% endif %}
+    {% endif %}
 
   # Fallback message based on time of day
   time_based_message: >
@@ -328,7 +342,7 @@ action:
       target: !input telegram_target
       message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }} ({{ selected_provider }}/{{ selected_model }})"
 
-# Check cooldown (skip for manual triggers) - SILENT by default
+# Check cooldown with debug info (skip for manual triggers)
 - if:
   - condition: template
     value_template: "{{ cooldown_active }}"
@@ -340,7 +354,12 @@ action:
     - service: telegram_bot.send_message
       data:
         target: !input telegram_target
-        message: "⏰ {{ time_prefix }}{{ camera_name }} cooldown active ({{ seconds_since_last }}s of {{ cooldown_seconds }}s) - skipping"
+        message: |
+          ⏰ {{ time_prefix }}{{ camera_name }} cooldown active
+          Last triggered: {{ automation_last_triggered }}
+          Current time: {{ now().isoformat() }}
+          Seconds since: {{ (as_timestamp(now()) - as_timestamp(automation_last_triggered)) | int if automation_last_triggered else 'N/A' }}
+          Cooldown period: {{ cooldown_seconds }}s
   - stop: "Cooldown active for {{ camera_name }}"
 
 # Take snapshot for importance analysis
@@ -480,7 +499,7 @@ action:
         - service: telegram_bot.send_message
           data:
             target: !input telegram_target
-            message: "{{ time_based_message }} (AI unavailable)"
+          message: "{{ time_based_message }} (AI unavailable)"
       
       # Silent mode - do nothing
       default: []
