@@ -1,9 +1,9 @@
 blueprint:
-  name: AI Event Summary with Telegram (Smart Filtering v1.3.1)
+  name: AI Event Summary with Telegram (Enhanced v1.4)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
-  description: 'AI-powered camera event summaries with smart filtering and configurable analysis.'
+  description: 'AI-powered camera event summaries with smart filtering, timeline storage, and memory integration.'
   domain: automation
   input:
     telegram_section:
@@ -16,6 +16,19 @@ blueprint:
           default: "7882720724"
           selector:
             text: {}
+        notification_time:
+          name: Notification Time Format
+          description: Add time to notification messages
+          default: "24hour"
+          selector:
+            select:
+              options:
+                - label: "No Time Added"
+                  value: "none"
+                - label: "12 Hour Format (3:45 PM)"
+                  value: "12hour"
+                - label: "24 Hour Format (15:45)"
+                  value: "24hour"
     camera_section:
       name: Camera Settings
       icon: mdi:camera
@@ -109,6 +122,18 @@ blueprint:
           selector:
             text:
               multiline: true
+        use_memory:
+          name: Use Memory
+          description: Use information stored in memory to provide additional context (requires LLMVision memory setup)
+          default: false
+          selector:
+            boolean: {}
+        store_timeline:
+          name: Store in Timeline
+          description: Store events in Home Assistant timeline for review
+          default: true
+          selector:
+            boolean: {}
     filtering_section:
       name: Smart Filtering
       icon: mdi:filter
@@ -149,8 +174,21 @@ variables:
   minimum_importance: !input minimum_importance
   show_filtered_events: !input show_filtered_events
   custom_prompt: !input custom_prompt
+  use_memory: !input use_memory
+  store_timeline: !input store_timeline
+  notification_time: !input notification_time
   
   is_manual_trigger: "{{ trigger is not defined }}"
+  
+  # Time formatting
+  time_suffix: >
+    {% if notification_time == "12hour" %}
+      {{ " at " + now().strftime("%-I:%M %p") }}
+    {% elif notification_time == "24hour" %}
+      {{ " at " + now().strftime("%H:%M") }}
+    {% else %}
+      {{ "" }}
+    {% endif %}
   
   # Determine which camera triggered the event
   triggered_camera: >
@@ -225,7 +263,7 @@ action:
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "🔧 Manual trigger for {{ camera_name }} at {{ now().strftime('%H:%M:%S') }}"
+      message: "🔧 Manual trigger for {{ camera_name }}{{ time_suffix }}"
 
 # Check cooldown (skip for manual triggers)
 - if:
@@ -235,7 +273,7 @@ action:
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "⏰ {{ camera_name }} cooldown active ({{ cooldown_minutes }}min) - skipping"
+      message: "⏰ {{ camera_name }} cooldown active ({{ cooldown_minutes }}min){{ time_suffix }} - skipping"
   - stop: "Cooldown active for {{ camera_name }}"
 
 # Create cooldown helper if it doesn't exist
@@ -288,7 +326,7 @@ action:
     - service: telegram_bot.send_message
       data:
         target: !input telegram_target
-        message: "🔍 {{ camera_name }} - Importance: {{ importance_result.response_text.title() }} ✓"
+        message: "🔍 {{ camera_name }} - Importance: {{ importance_result.response_text.title() }} ✓{{ time_suffix }}"
     else:
     - if:
       - condition: template
@@ -297,7 +335,7 @@ action:
       - service: telegram_bot.send_message
         data:
           target: !input telegram_target
-          message: "🔇 {{ camera_name }} - Filtered ({{ importance_result.response_text }}) - no alert sent"
+          message: "🔇 {{ camera_name }} - Filtered ({{ importance_result.response_text }}){{ time_suffix }} - no alert sent"
     - stop: "Event filtered - importance too low"
 
 # Send initial notification with snapshot
@@ -305,7 +343,7 @@ action:
   data:
     target: !input telegram_target
     file: "{{ snapshot_path }}"
-    caption: "📹 {{ camera_name }} detected motion - analyzing..."
+    caption: "📹 {{ camera_name }} detected motion{{ time_suffix }} - analyzing..."
 
 # Main AI Analysis
 - service: llmvision.stream_analyzer
@@ -318,13 +356,17 @@ action:
     max_frames: !input max_frames
     target_width: !input target_width
     max_tokens: !input max_tokens
+    use_memory: !input use_memory
+    remember: !input store_timeline
+    generate_title: !input store_timeline
+    expose_images: !input store_timeline
   response_variable: analysis
 
 # Send detailed analysis result
 - service: telegram_bot.send_message
   data:
     target: !input telegram_target
-    message: "🔍 {{ camera_name }}: {{ analysis.response_text }}"
+    message: "🔍 {{ camera_name }}{{ time_suffix }}: {{ analysis.response_text }}"
 
 # Update cooldown timestamp
 - service: input_datetime.set_datetime
