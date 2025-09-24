@@ -19,7 +19,7 @@ blueprint:
         notification_time:
           name: Notification Time Format
           description: Add time to notification messages
-          default: "24hour"
+          default: "12hour"
           selector:
             select:
               options:
@@ -181,11 +181,11 @@ variables:
   is_manual_trigger: "{{ trigger is not defined }}"
   
   # Time formatting
-  time_suffix: >
+  time_prefix: >
     {% if notification_time == "12hour" %}
-      {{ " at " + now().strftime("%-I:%M %p") }}
+      {{ now().strftime("%-I:%M %p") + " " }}
     {% elif notification_time == "24hour" %}
-      {{ " at " + now().strftime("%H:%M") }}
+      {{ now().strftime("%H:%M") + " " }}
     {% else %}
       {{ "" }}
     {% endif %}
@@ -235,9 +235,7 @@ variables:
     {% if custom_prompt != "" %}
       {{ custom_prompt }}
     {% else %}
-      Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. 
-      Be specific about what is happening, the number of people/vehicles, their actions, and location in the frame.
-      Keep your response concise but informative.
+      Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise.
     {% endif %}
 
 max_exceeded: silent
@@ -263,7 +261,7 @@ action:
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "🔧 Manual trigger for {{ camera_name }}{{ time_suffix }}"
+      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }}"
 
 # Check cooldown (skip for manual triggers)
 - if:
@@ -273,7 +271,7 @@ action:
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "⏰ {{ camera_name }} cooldown active ({{ cooldown_minutes }}min){{ time_suffix }} - skipping"
+      message: "⏰ {{ time_prefix }}{{ camera_name }} cooldown active ({{ cooldown_minutes }}min) - skipping"
   - stop: "Cooldown active for {{ camera_name }}"
 
 # Create cooldown helper if it doesn't exist
@@ -291,7 +289,7 @@ action:
   data:
     filename: "{{ snapshot_path }}"
 
-# Importance Classification (if enabled)
+# Importance Classification (if enabled) and combined first message
 - if:
   - condition: template
     value_template: "{{ importance_filtering and not is_manual_trigger }}"
@@ -323,10 +321,11 @@ action:
           {{ true }}
         {% endif %}
     then:
+    # Message 1: Time + Camera + Motion + Importance
     - service: telegram_bot.send_message
       data:
         target: !input telegram_target
-        message: "🔍 {{ camera_name }} - Importance: {{ importance_result.response_text.title() }} ✓{{ time_suffix }}"
+        message: "{{ time_prefix }}{{ camera_name }} detected motion ({{ importance_result.response_text }})"
     else:
     - if:
       - condition: template
@@ -335,15 +334,20 @@ action:
       - service: telegram_bot.send_message
         data:
           target: !input telegram_target
-          message: "🔇 {{ camera_name }} - Filtered ({{ importance_result.response_text }}){{ time_suffix }} - no alert sent"
+          message: "🔇 {{ time_prefix }}{{ camera_name }} - Filtered ({{ importance_result.response_text }}) - no alert sent"
     - stop: "Event filtered - importance too low"
+  else:
+  # No importance filtering - simple message
+  - service: telegram_bot.send_message
+    data:
+      target: !input telegram_target
+      message: "{{ time_prefix }}{{ camera_name }} detected motion"
 
-# Send initial notification with snapshot
+# Message 2: Send image
 - service: telegram_bot.send_photo
   data:
     target: !input telegram_target
     file: "{{ snapshot_path }}"
-    caption: "📹 {{ camera_name }} detected motion{{ time_suffix }} - analyzing..."
 
 # Main AI Analysis
 - service: llmvision.stream_analyzer
@@ -362,11 +366,11 @@ action:
     expose_images: !input store_timeline
   response_variable: analysis
 
-# Send detailed analysis result
+# Message 3: Analysis result
 - service: telegram_bot.send_message
   data:
     target: !input telegram_target
-    message: "🔍 {{ camera_name }}{{ time_suffix }}: {{ analysis.response_text }}"
+    message: "{{ analysis.response_text }}"
 
 # Update cooldown timestamp
 - service: input_datetime.set_datetime
