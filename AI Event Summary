@@ -224,7 +224,6 @@ variables:
 
 max_exceeded: silent
 mode: single
-max: 1
 
 trigger:
 - platform: state
