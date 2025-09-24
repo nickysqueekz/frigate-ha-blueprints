@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.4)
+  name: AI Event Summary with Telegram (Enhanced v1.5)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -289,7 +289,7 @@ action:
   data:
     filename: "{{ snapshot_path }}"
 
-# Importance Classification (if enabled) and combined first message
+# Importance Classification (if enabled)
 - if:
   - condition: template
     value_template: "{{ importance_filtering and not is_manual_trigger }}"
@@ -321,11 +321,11 @@ action:
           {{ true }}
         {% endif %}
     then:
-    # Message 1: Time + Camera + Motion + Importance
+    # Continue to send notification
     - service: telegram_bot.send_message
       data:
         target: !input telegram_target
-        message: "{{ time_prefix }}{{ camera_name }} detected motion ({{ importance_result.response_text }})"
+        message: "✓ Importance check passed: {{ importance_result.response_text }}"
     else:
     - if:
       - condition: template
@@ -336,18 +336,13 @@ action:
           target: !input telegram_target
           message: "🔇 {{ time_prefix }}{{ camera_name }} - Filtered ({{ importance_result.response_text }}) - no alert sent"
     - stop: "Event filtered - importance too low"
-  else:
-  # No importance filtering - simple message
-  - service: telegram_bot.send_message
-    data:
-      target: !input telegram_target
-      message: "{{ time_prefix }}{{ camera_name }} detected motion"
 
-# Message 2: Send image
+# Message 1: Combined timestamp + camera + image + analyzing caption
 - service: telegram_bot.send_photo
   data:
     target: !input telegram_target
     file: "{{ snapshot_path }}"
+    caption: "{{ time_prefix }}{{ camera_name }} - analyzing..."
 
 # Main AI Analysis
 - service: llmvision.stream_analyzer
@@ -366,7 +361,7 @@ action:
     expose_images: !input store_timeline
   response_variable: analysis
 
-# Message 3: Analysis result
+# Message 2: AI Analysis result only
 - service: telegram_bot.send_message
   data:
     target: !input telegram_target
