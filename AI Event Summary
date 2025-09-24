@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5.4.1)
+  name: AI Event Summary with Telegram (Enhanced v1.5.4.2)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -66,7 +66,7 @@ blueprint:
         show_cooldown_messages:
           name: Show Cooldown Messages
           description: Send a message when events are skipped due to cooldown (for debugging)
-          default: true
+          default: false
           selector:
             boolean: {}
     ai_section:
@@ -278,9 +278,6 @@ variables:
   cooldown_seconds: "{{ cooldown_minutes * 60 }}"
   automation_last_triggered: "{{ this.attributes.last_triggered }}"
   
-  # Create per-camera cooldown check using state tracking
-  camera_cooldown_entity: "input_boolean.camera_cooldown_{{ triggered_camera.replace('camera.', '').replace('.', '_') }}"
-  
   # Check if we're in cooldown for this specific camera
   cooldown_active: >
     {% if is_manual_trigger or cooldown_minutes == 0 %}
@@ -481,7 +478,7 @@ action:
           target: !input telegram_target
           message: "🚨 {{ time_prefix }}{{ camera_name }} - AI API failed (quota/service error) - using fallback"
     
-    # Send fallback notification based on mode
+    # Send fallback notification based on mode - FIXED YAML SYNTAX
     - choose:
       - conditions:
         - condition: template
@@ -499,7 +496,7 @@ action:
         - service: telegram_bot.send_message
           data:
             target: !input telegram_target
-          message: "{{ time_based_message }} (AI unavailable)"
+            message: "{{ time_based_message }} (AI unavailable)"
       
       # Silent mode - do nothing
       default: []
