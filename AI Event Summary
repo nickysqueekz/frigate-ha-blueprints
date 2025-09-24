@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5)
+  name: AI Event Summary with Telegram (Enhanced v1.4)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -115,13 +115,6 @@ blueprint:
               min: 10
               max: 200
               step: 10
-        custom_prompt:
-          name: Analysis Prompt
-          description: Custom prompt for AI analysis (leave empty for default)
-          default: ""
-          selector:
-            text:
-              multiline: true
         use_memory:
           name: Use Memory
           description: Use information stored in memory to provide additional context (requires LLMVision memory setup)
@@ -173,7 +166,6 @@ variables:
   importance_filtering: !input importance_filtering
   minimum_importance: !input minimum_importance
   show_filtered_events: !input show_filtered_events
-  custom_prompt: !input custom_prompt
   use_memory: !input use_memory
   store_timeline: !input store_timeline
   notification_time: !input notification_time
@@ -231,13 +223,6 @@ variables:
     
     Consider the context and whether a homeowner would want to be notified about this event.
 
-  analysis_prompt: >
-    {% if custom_prompt != "" %}
-      {{ custom_prompt }}
-    {% else %}
-      Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise.
-    {% endif %}
-
 max_exceeded: silent
 mode: parallel
 max: 10
@@ -289,7 +274,7 @@ action:
   data:
     filename: "{{ snapshot_path }}"
 
-# Importance Classification (if enabled)
+# Importance Classification (if enabled) - SILENT CHECK
 - if:
   - condition: template
     value_template: "{{ importance_filtering and not is_manual_trigger }}"
@@ -305,28 +290,22 @@ action:
       max_tokens: 5
     response_variable: importance_result
 
-  # Check if event meets minimum importance threshold
+  # Check if event meets minimum importance threshold - STOP SILENTLY IF NOT
   - if:
     - condition: template
       value_template: >
         {% set detected = importance_result.response_text.lower().strip() %}
         {% set min_level = minimum_importance %}
         {% if min_level == "passive" %}
-          {{ true }}
+          {{ false }}
         {% elif min_level == "time-sensitive" %}
-          {{ detected in ["time-sensitive", "critical"] }}
+          {{ detected not in ["time-sensitive", "critical"] }}
         {% elif min_level == "critical" %}
-          {{ detected == "critical" }}
+          {{ detected != "critical" }}
         {% else %}
-          {{ true }}
+          {{ false }}
         {% endif %}
     then:
-    # Continue to send notification
-    - service: telegram_bot.send_message
-      data:
-        target: !input telegram_target
-        message: "✓ Importance check passed: {{ importance_result.response_text }}"
-    else:
     - if:
       - condition: template
         value_template: "{{ show_filtered_events }}"
@@ -344,14 +323,14 @@ action:
     file: "{{ snapshot_path }}"
     caption: "{{ time_prefix }}{{ camera_name }} - analyzing..."
 
-# Main AI Analysis
+# Main AI Analysis (back to simple version)
 - service: llmvision.stream_analyzer
   data:
     image_entity: ["{{ triggered_camera }}"]
     duration: !input duration
     provider: !input provider
     model: !input model
-    message: "{{ analysis_prompt }}"
+    message: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise."
     max_frames: !input max_frames
     target_width: !input target_width
     max_tokens: !input max_tokens
