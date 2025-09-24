@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5.1)
+  name: AI Event Summary with Telegram (Enhanced v1.5.2)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -63,6 +63,12 @@ blueprint:
               min: 0
               max: 60
               step: 1
+        show_cooldown_messages:
+          name: Show Cooldown Messages
+          description: Send a message when events are skipped due to cooldown (for debugging)
+          default: false
+          selector:
+            boolean: {}
     ai_section:
       name: AI Analysis Settings
       icon: mdi:brain
@@ -163,6 +169,7 @@ variables:
   telegram_target: !input telegram_target
   trigger_state: !input trigger_state
   cooldown_minutes: !input cooldown_minutes
+  show_cooldown_messages: !input show_cooldown_messages
   importance_filtering: !input importance_filtering
   minimum_importance: !input minimum_importance
   show_filtered_events: !input show_filtered_events
@@ -198,19 +205,11 @@ variables:
   camera_name: '{{ triggered_camera.replace("camera.", "").replace("_", " ").title() }}'
   snapshot_path: '/config/www/snapshots/{{ triggered_camera.replace("camera.", "") }}_snapshot.jpg'
   
-  # Cooldown check
-  cooldown_key: 'last_notification_{{ triggered_camera.replace("camera.", "").replace(".", "_") }}'
-  last_notification_time: >
-    {% set state_obj = states('input_datetime.' + cooldown_key) %}
-    {% if state_obj != 'unknown' and state_obj != 'unavailable' %}
-      {{ as_timestamp(state_obj) }}
-    {% else %}
-      {{ 0 }}
-    {% endif %}
-  
-  cooldown_active: >
-    {{ not is_manual_trigger and 
-       (as_timestamp(now()) - last_notification_time|float) < (cooldown_minutes * 60) }}
+  # Simplified cooldown using automation attributes
+  cooldown_seconds: "{{ cooldown_minutes * 60 }}"
+  last_triggered: "{{ this.attributes.last_triggered if this.attributes.last_triggered else '1970-01-01T00:00:00+00:00' }}"
+  seconds_since_last: "{{ (as_timestamp(now()) - as_timestamp(last_triggered)) | int }}"
+  cooldown_active: "{{ not is_manual_trigger and seconds_since_last < cooldown_seconds }}"
 
   # AI Prompts
   importance_prompt: >
@@ -224,8 +223,8 @@ variables:
     Consider the context and whether a homeowner would want to be notified about this event.
 
 max_exceeded: silent
-mode: parallel
-max: 10
+mode: single
+max: 1
 
 trigger:
 - platform: state
@@ -248,24 +247,20 @@ action:
       target: !input telegram_target
       message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }}"
 
-# Check cooldown (skip for manual triggers)
+# Check cooldown (skip for manual triggers) - SILENT by default
 - if:
   - condition: template
     value_template: "{{ cooldown_active }}"
   then:
-  - service: telegram_bot.send_message
-    data:
-      target: !input telegram_target
-      message: "⏰ {{ time_prefix }}{{ camera_name }} cooldown active ({{ cooldown_minutes }}min) - skipping"
+  - if:
+    - condition: template
+      value_template: "{{ show_cooldown_messages }}"
+    then:
+    - service: telegram_bot.send_message
+      data:
+        target: !input telegram_target
+        message: "⏰ {{ time_prefix }}{{ camera_name }} cooldown active ({{ seconds_since_last }}s of {{ cooldown_seconds }}s) - skipping"
   - stop: "Cooldown active for {{ camera_name }}"
-
-# Create cooldown helper if it doesn't exist
-- service: input_datetime.set_datetime
-  target:
-    entity_id: "input_datetime.{{ cooldown_key }}"
-  data:
-    datetime: "{{ now().isoformat() }}"
-  continue_on_error: true
 
 # Take snapshot for importance analysis
 - service: camera.snapshot
@@ -345,11 +340,3 @@ action:
   data:
     target: !input telegram_target
     message: "{{ analysis.response_text }}"
-
-# Update cooldown timestamp
-- service: input_datetime.set_datetime
-  target:
-    entity_id: "input_datetime.{{ cooldown_key }}"
-  data:
-    datetime: "{{ now().isoformat() }}"
-  continue_on_error: true
