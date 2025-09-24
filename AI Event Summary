@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5.2)
+  name: AI Event Summary with Telegram (Enhanced v1.5.4)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -73,16 +73,41 @@ blueprint:
       name: AI Analysis Settings
       icon: mdi:brain
       input:
-        provider:
-          name: LLM Provider
-          description: Provider for AI analysis
+        provider_config:
+          name: LLM Provider Configuration
+          description: Select your configured LLMVision provider
           selector:
             config_entry:
               integration: llmvision
-        model:
-          name: Model
-          description: Model to use
-          default: "gpt-4o-mini"
+        provider_model:
+          name: Provider & Model
+          description: Select the AI provider and model combination to use
+          default: "google|gemini-2.5-flash"
+          selector:
+            select:
+              options:
+                # Google Options
+                - label: "Google Gemini 2.5 Flash (Fast, affordable)"
+                  value: "google|gemini-2.5-flash"
+                - label: "Google Gemini 2.5 Flash Lite (Ultra-fast)"
+                  value: "google|gemini-2.5-flash-lite"
+                - label: "Google Gemini 2.5 Pro (Most capable)"
+                  value: "google|gemini-2.5-pro"
+                # OpenAI Options
+                - label: "OpenAI GPT-4o (Intelligent, flexible)"
+                  value: "openai|gpt-4o"
+                - label: "OpenAI GPT-4o Mini (Fast, affordable)"
+                  value: "openai|gpt-4o-mini"
+                # Anthropic Options
+                - label: "Anthropic Claude 3.5 Sonnet (High reasoning)"
+                  value: "anthropic|claude-3-5-sonnet-20241022"
+                # For manual entry if needed
+                - label: "Custom (use manual model field below)"
+                  value: "custom|custom"
+        manual_model:
+          name: Manual Model Name (Optional)
+          description: Only used if 'Custom' is selected above. Enter the exact model name.
+          default: ""
           selector:
             text: {}
         duration:
@@ -208,8 +233,20 @@ variables:
   enable_fallback: !input enable_fallback
   fallback_mode: !input fallback_mode
   show_api_errors: !input show_api_errors
+  provider_config: !input provider_config
+  provider_model: !input provider_model
+  manual_model: !input manual_model
   
   is_manual_trigger: "{{ trigger is not defined }}"
+  
+  # Parse the combined provider|model selection
+  selected_provider: "{{ provider_model.split('|')[0] }}"
+  selected_model: >
+    {% if provider_model.split('|')[1] == 'custom' %}
+      {{ manual_model if manual_model != '' else 'gpt-4o-mini' }}
+    {% else %}
+      {{ provider_model.split('|')[1] }}
+    {% endif %}
   
   # Time formatting
   time_prefix: >
@@ -289,7 +326,7 @@ action:
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }}"
+      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }} ({{ selected_provider }}/{{ selected_model }})"
 
 # Check cooldown (skip for manual triggers) - SILENT by default
 - if:
@@ -321,8 +358,8 @@ action:
   - service: llmvision.image_analyzer
     data:
       image_entity: ["{{ triggered_camera }}"]
-      provider: !input provider
-      model: !input model
+      provider: !input provider_config
+      model: "{{ selected_model }}"
       message: "{{ importance_prompt }}"
       include_filename: false
       target_width: !input target_width
@@ -386,8 +423,8 @@ action:
   data:
     image_entity: ["{{ triggered_camera }}"]
     duration: !input duration
-    provider: !input provider
-    model: !input model
+    provider: !input provider_config
+    model: "{{ selected_model }}"
     message: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise."
     max_frames: !input max_frames
     target_width: !input target_width
