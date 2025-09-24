@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5.3)
+  name: AI Event Summary with Telegram (Enhanced v1.5.3.1)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -236,9 +236,17 @@ variables:
   
   is_manual_trigger: "{{ trigger is not defined }}"
   
-  # Parse provider and model from combined selection
-  primary_provider: "{{ primary_provider_model.split('_')[0] }}"
-  primary_model: "{{ primary_provider_model.split('_', 1)[1] }}"
+  # DEBUG: Let's see what we're working with
+  debug_provider_model: "{{ primary_provider_model }}"
+  
+  # Parse provider and model from combined selection - FIXED LOGIC
+  primary_provider: >
+    {% set parts = primary_provider_model.split('_') %}
+    {{ parts[0] if parts|length > 0 else 'google' }}
+  
+  primary_model: >
+    {% set parts = primary_provider_model.split('_', 1) %}
+    {{ parts[1] if parts|length > 1 else 'gemini-2.5-flash' }}
   
   # Time formatting
   time_prefix: >
@@ -310,7 +318,7 @@ trigger:
   id: motion_trigger
 
 action:
-# Manual trigger notification
+# Manual trigger notification with debug info
 - if:
   - condition: template
     value_template: "{{ is_manual_trigger }}"
@@ -318,7 +326,7 @@ action:
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }} ({{ primary_provider }} {{ primary_model }})"
+      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }} ({{ primary_provider }} + {{ primary_model }}) [Debug: {{ debug_provider_model }}]"
 
 # Check cooldown (skip for manual triggers) - SILENT by default
 - if:
@@ -371,7 +379,7 @@ action:
       - service: telegram_bot.send_message
         data:
           target: !input telegram_target
-          message: "⚠️ {{ time_prefix }}{{ camera_name }} - Importance API failed ({{ primary_provider }}), proceeding anyway"
+          message: "⚠️ {{ time_prefix }}{{ camera_name }} - Importance API failed ({{ primary_provider }} {{ primary_model }}), proceeding anyway"
     # Set fallback importance for filtering logic
     - variables:
         importance_result: 
@@ -408,7 +416,7 @@ action:
   data:
     target: !input telegram_target
     file: "{{ snapshot_path }}"
-    caption: "{{ time_prefix }}{{ camera_name }} - analyzing..."
+    caption: "{{ time_prefix }}{{ camera_name }} - analyzing... ({{ primary_provider }} {{ primary_model }})"
 
 # Main AI Analysis with comprehensive error handling
 - service: llmvision.stream_analyzer
