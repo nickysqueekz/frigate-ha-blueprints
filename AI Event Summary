@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5.4)
+  name: AI Event Summary with Telegram (Enhanced v1.5.3)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -73,18 +73,42 @@ blueprint:
       name: AI Analysis Settings
       icon: mdi:brain
       input:
-        provider:
-          name: LLM Provider
-          description: Provider for AI analysis
+        primary_provider_model:
+          name: Primary AI Provider & Model
+          description: Main AI provider and model to use for analysis
+          default: "google_gemini-2.5-flash"
           selector:
-            config_entry:
-              integration: llmvision
-        model:
-          name: Model
-          description: Model to use
-          default: "gpt-4o-mini"
-          selector:
-            text: {}
+            select:
+              options:
+                # OpenAI
+                - label: "OpenAI GPT-4o (Fast, intelligent, flexible)"
+                  value: "openai_gpt-4o"
+                - label: "OpenAI GPT-4o-mini (Fast, affordable, focused)"
+                  value: "openai_gpt-4o-mini"
+                # Google
+                - label: "Google Gemini-2.5-pro (Powerful thinking model)"
+                  value: "google_gemini-2.5-pro"
+                - label: "Google Gemini-2.5-flash (Fast, affordable all-rounder)"
+                  value: "google_gemini-2.5-flash"
+                - label: "Google Gemini-2.5-flash-lite (Ultra-fast, basic tasks)"
+                  value: "google_gemini-2.5-flash-lite"
+                # Anthropic
+                - label: "Anthropic Claude-opus-4-0 (Most powerful and capable)"
+                  value: "anthropic_claude-opus-4-0"
+                - label: "Anthropic Claude-sonnet-4-0 (High-performance reasoning)"
+                  value: "anthropic_claude-sonnet-4-0"
+                # Groq
+                - label: "Groq Llama-4-maverick-17b (Most accurate)"
+                  value: "groq_meta-llama/llama-4-maverick-17b-128e-instruct"
+                - label: "Groq Llama-4-scout-17b (Fast)"
+                  value: "groq_meta-llama/llama-4-scout-17b-16e-instruct"
+                # OpenRouter (popular models)
+                - label: "OpenRouter GPT-4o (via OpenRouter)"
+                  value: "openrouter_openai/gpt-4o"
+                - label: "OpenRouter Claude-3.5-sonnet (via OpenRouter)"
+                  value: "openrouter_anthropic/claude-3.5-sonnet"
+                - label: "OpenRouter Llama-3.1-70b (via OpenRouter)"
+                  value: "openrouter_meta-llama/llama-3.1-70b-instruct"
         duration:
           name: Analysis Duration (Seconds)
           description: How long to record for analysis
@@ -208,8 +232,13 @@ variables:
   enable_fallback: !input enable_fallback
   fallback_mode: !input fallback_mode
   show_api_errors: !input show_api_errors
+  primary_provider_model: !input primary_provider_model
   
   is_manual_trigger: "{{ trigger is not defined }}"
+  
+  # Parse provider and model from combined selection
+  primary_provider: "{{ primary_provider_model.split('_')[0] }}"
+  primary_model: "{{ primary_provider_model.split('_', 1)[1] }}"
   
   # Time formatting
   time_prefix: >
@@ -289,7 +318,7 @@ action:
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }}"
+      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }} ({{ primary_provider }} {{ primary_model }})"
 
 # Check cooldown (skip for manual triggers) - SILENT by default
 - if:
@@ -321,8 +350,8 @@ action:
   - service: llmvision.image_analyzer
     data:
       image_entity: ["{{ triggered_camera }}"]
-      provider: !input provider
-      model: !input model
+      provider: "{{ primary_provider }}"
+      model: "{{ primary_model }}"
       message: "{{ importance_prompt }}"
       include_filename: false
       target_width: !input target_width
@@ -342,7 +371,7 @@ action:
       - service: telegram_bot.send_message
         data:
           target: !input telegram_target
-          message: "⚠️ {{ time_prefix }}{{ camera_name }} - Importance API failed, proceeding anyway"
+          message: "⚠️ {{ time_prefix }}{{ camera_name }} - Importance API failed ({{ primary_provider }}), proceeding anyway"
     # Set fallback importance for filtering logic
     - variables:
         importance_result: 
@@ -386,8 +415,8 @@ action:
   data:
     image_entity: ["{{ triggered_camera }}"]
     duration: !input duration
-    provider: !input provider
-    model: !input model
+    provider: "{{ primary_provider }}"
+    model: "{{ primary_model }}"
     message: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise."
     max_frames: !input max_frames
     target_width: !input target_width
@@ -423,7 +452,7 @@ action:
       - service: telegram_bot.send_message
         data:
           target: !input telegram_target
-          message: "🚨 {{ time_prefix }}{{ camera_name }} - AI API failed (quota/service error) - using fallback"
+          message: "🚨 {{ time_prefix }}{{ camera_name }} - {{ primary_provider }} {{ primary_model }} failed (quota/service error) - using fallback"
     
     # Send fallback notification based on mode
     - choose:
