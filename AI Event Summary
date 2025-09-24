@@ -1,9 +1,9 @@
 blueprint:
-  name: AI Event Summary with Telegram (Simple v1.0)
+  name: AI Event Summary with Telegram (Multi-Camera + Cooldown v1.2)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
-  description: 'Simple AI-powered camera event summaries sent to Telegram.'
+  description: 'AI-powered camera event summaries sent to Telegram with multiple camera support and cooldown.'
   domain: automation
   input:
     telegram_target:
@@ -12,19 +12,36 @@ blueprint:
       default: "7882720724"
       selector:
         text: {}
-    camera_entity:
-      name: Camera Entity
-      description: Single camera entity to monitor
+    camera_entities:
+      name: Camera Entities
+      description: Camera entities to monitor (can select multiple)
       selector:
         entity:
+          multiple: true
           domain: camera
-    motion_sensor:
-      name: Motion Sensor (Optional)
-      description: Motion sensor for this camera (leave empty if camera changes state)
-      default: ""
+    motion_sensors:
+      name: Motion Sensors (Optional)
+      description: Motion sensors for cameras (same order as cameras). Leave empty if cameras change state directly.
+      default: []
       selector:
         entity:
+          multiple: true
           domain: binary_sensor
+    trigger_state:
+      name: Camera Trigger State
+      description: State that triggers the automation for cameras
+      default: "recording"
+      selector:
+        text: {}
+    cooldown_minutes:
+      name: Cooldown (Minutes)
+      description: Wait time before allowing another notification for the same camera
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 1
     provider:
       name: LLM Provider
       description: Provider for AI analysis
@@ -39,23 +56,54 @@ blueprint:
         text: {}
 
 variables:
-  camera_entity: !input camera_entity
-  motion_sensor: !input motion_sensor
+  camera_entities: !input camera_entities
+  motion_sensors: !input motion_sensors
   telegram_target: !input telegram_target
-  camera_name: '{{ camera_entity.replace("camera.", "").replace("_", " ").title() }}'
-  snapshot_path: '/config/www/snapshots/{{ camera_entity.replace("camera.", "") }}_snapshot.jpg'
+  trigger_state: !input trigger_state
+  cooldown_minutes: !input cooldown_minutes
   is_manual_trigger: "{{ trigger is not defined }}"
+  
+  # Determine which camera triggered the event
+  triggered_camera: >
+    {% if is_manual_trigger %}
+      {{ camera_entities[0] }}
+    {% elif trigger.entity_id.startswith('camera.') %}
+      {{ trigger.entity_id }}
+    {% elif motion_sensors and trigger.entity_id in motion_sensors %}
+      {% set sensor_index = motion_sensors.index(trigger.entity_id) %}
+      {{ camera_entities[sensor_index] if sensor_index < camera_entities|length else camera_entities[0] }}
+    {% else %}
+      {{ camera_entities[0] }}
+    {% endif %}
+  
+  camera_name: '{{ triggered_camera.replace("camera.", "").replace("_", " ").title() }}'
+  snapshot_path: '/config/www/snapshots/{{ triggered_camera.replace("camera.", "") }}_snapshot.jpg'
+  
+  # Cooldown check - create a unique key per camera
+  cooldown_key: 'last_notification_{{ triggered_camera.replace("camera.", "").replace(".", "_") }}'
+  last_notification_time: >
+    {% set state_obj = states('input_datetime.' + cooldown_key) %}
+    {% if state_obj != 'unknown' and state_obj != 'unavailable' %}
+      {{ as_timestamp(state_obj) }}
+    {% else %}
+      {{ 0 }}
+    {% endif %}
+  
+  cooldown_active: >
+    {{ not is_manual_trigger and 
+       (as_timestamp(now()) - last_notification_time|float) < (cooldown_minutes * 60) }}
 
 max_exceeded: silent
-mode: single
+mode: parallel  # Allow multiple cameras to trigger simultaneously
+max: 10
 
 trigger:
 - platform: state
-  entity_id: !input camera_entity
-  to: "recording"
+  entity_id: !input camera_entities
+  to: !input trigger_state
   id: camera_trigger
 - platform: state  
-  entity_id: !input motion_sensor
+  entity_id: !input motion_sensors
   to: "on"
   id: motion_trigger
 
@@ -68,38 +116,64 @@ action:
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "🔧 Manual trigger activated for {{ camera_name }} at {{ now().strftime('%H:%M:%S') }}"
+      message: "🔧 Manual trigger for {{ camera_name }} at {{ now().strftime('%H:%M:%S') }}"
 
-# Regular event processing
+# Check cooldown (skip for manual triggers)
 - if:
   - condition: template
-    value_template: "{{ not is_manual_trigger }}"
+    value_template: "{{ cooldown_active }}"
   then:
-  - service: camera.snapshot
-    target:
-      entity_id: "{{ camera_entity }}"
-    data:
-      filename: "{{ snapshot_path }}"
-  
-  - service: telegram_bot.send_photo
-    data:
-      target: !input telegram_target
-      file: "{{ snapshot_path }}"
-      caption: "📹 {{ camera_name }} detected motion - analyzing..."
-  
-  - service: llmvision.stream_analyzer
-    data:
-      image_entity: ["{{ camera_entity }}"]
-      duration: 5
-      provider: !input provider
-      model: !input model
-      message: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity."
-      max_frames: 3
-      target_width: 1280
-      max_tokens: 50
-    response_variable: analysis
-  
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "🔍 Analysis: {{ analysis.response_text }}"
+      message: "⏰ {{ camera_name }} cooldown active ({{ cooldown_minutes }}min) - skipping notification"
+  - stop: "Cooldown active for {{ camera_name }}"
+
+# Create cooldown helper if it doesn't exist
+- service: input_datetime.set_datetime
+  target:
+    entity_id: "input_datetime.{{ cooldown_key }}"
+  data:
+    datetime: "{{ now().isoformat() }}"
+  continue_on_error: true
+
+# Take snapshot
+- service: camera.snapshot
+  target:
+    entity_id: "{{ triggered_camera }}"
+  data:
+    filename: "{{ snapshot_path }}"
+
+# Send initial notification with snapshot
+- service: telegram_bot.send_photo
+  data:
+    target: !input telegram_target
+    file: "{{ snapshot_path }}"
+    caption: "📹 {{ camera_name }} detected motion - analyzing..."
+
+# AI Analysis
+- service: llmvision.stream_analyzer
+  data:
+    image_entity: ["{{ triggered_camera }}"]
+    duration: 5
+    provider: !input provider
+    model: !input model
+    message: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise."
+    max_frames: 3
+    target_width: 1280
+    max_tokens: 50
+  response_variable: analysis
+
+# Send analysis result
+- service: telegram_bot.send_message
+  data:
+    target: !input telegram_target
+    message: "🔍 {{ camera_name }}: {{ analysis.response_text }}"
+
+# Update cooldown timestamp
+- service: input_datetime.set_datetime
+  target:
+    entity_id: "input_datetime.{{ cooldown_key }}"
+  data:
+    datetime: "{{ now().isoformat() }}"
+  continue_on_error: true
