@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5.3.1)
+  name: AI Event Summary with Telegram (Enhanced v1.5.3.2)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -73,6 +73,12 @@ blueprint:
       name: AI Analysis Settings
       icon: mdi:brain
       input:
+        llmvision_provider:
+          name: LLMVision Provider Config Entry
+          description: Select your LLMVision provider configuration
+          selector:
+            config_entry:
+              integration: llmvision
         primary_provider_model:
           name: Primary AI Provider & Model
           description: Main AI provider and model to use for analysis
@@ -80,35 +86,16 @@ blueprint:
           selector:
             select:
               options:
+                # Google
+                - label: "Google Gemini-2.5-flash (Fast, affordable all-rounder)"
+                  value: "google_gemini-2.5-flash"
+                - label: "Google Gemini-2.5-flash-lite (Ultra-fast, basic tasks)"
+                  value: "google_gemini-2.5-flash-lite"
                 # OpenAI
                 - label: "OpenAI GPT-4o (Fast, intelligent, flexible)"
                   value: "openai_gpt-4o"
                 - label: "OpenAI GPT-4o-mini (Fast, affordable, focused)"
                   value: "openai_gpt-4o-mini"
-                # Google
-                - label: "Google Gemini-2.5-pro (Powerful thinking model)"
-                  value: "google_gemini-2.5-pro"
-                - label: "Google Gemini-2.5-flash (Fast, affordable all-rounder)"
-                  value: "google_gemini-2.5-flash"
-                - label: "Google Gemini-2.5-flash-lite (Ultra-fast, basic tasks)"
-                  value: "google_gemini-2.5-flash-lite"
-                # Anthropic
-                - label: "Anthropic Claude-opus-4-0 (Most powerful and capable)"
-                  value: "anthropic_claude-opus-4-0"
-                - label: "Anthropic Claude-sonnet-4-0 (High-performance reasoning)"
-                  value: "anthropic_claude-sonnet-4-0"
-                # Groq
-                - label: "Groq Llama-4-maverick-17b (Most accurate)"
-                  value: "groq_meta-llama/llama-4-maverick-17b-128e-instruct"
-                - label: "Groq Llama-4-scout-17b (Fast)"
-                  value: "groq_meta-llama/llama-4-scout-17b-16e-instruct"
-                # OpenRouter (popular models)
-                - label: "OpenRouter GPT-4o (via OpenRouter)"
-                  value: "openrouter_openai/gpt-4o"
-                - label: "OpenRouter Claude-3.5-sonnet (via OpenRouter)"
-                  value: "openrouter_anthropic/claude-3.5-sonnet"
-                - label: "OpenRouter Llama-3.1-70b (via OpenRouter)"
-                  value: "openrouter_meta-llama/llama-3.1-70b-instruct"
         duration:
           name: Analysis Duration (Seconds)
           description: How long to record for analysis
@@ -183,7 +170,7 @@ blueprint:
         show_api_errors:
           name: Show API Error Messages
           description: Send error details to Telegram when API fails (for debugging)
-          default: false
+          default: true
           selector:
             boolean: {}
     filtering_section:
@@ -233,13 +220,11 @@ variables:
   fallback_mode: !input fallback_mode
   show_api_errors: !input show_api_errors
   primary_provider_model: !input primary_provider_model
+  llmvision_provider: !input llmvision_provider
   
   is_manual_trigger: "{{ trigger is not defined }}"
   
-  # DEBUG: Let's see what we're working with
-  debug_provider_model: "{{ primary_provider_model }}"
-  
-  # Parse provider and model from combined selection - FIXED LOGIC
+  # Parse provider and model from combined selection
   primary_provider: >
     {% set parts = primary_provider_model.split('_') %}
     {{ parts[0] if parts|length > 0 else 'google' }}
@@ -326,7 +311,7 @@ action:
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }} ({{ primary_provider }} + {{ primary_model }}) [Debug: {{ debug_provider_model }}]"
+      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }}\nSelected: {{ primary_provider_model }}\nProvider: {{ primary_provider }}\nModel: {{ primary_model }}\nConfig: {{ llmvision_provider }}"
 
 # Check cooldown (skip for manual triggers) - SILENT by default
 - if:
@@ -350,80 +335,19 @@ action:
   data:
     filename: "{{ snapshot_path }}"
 
-# Importance Classification (if enabled) - WITH ERROR HANDLING
-- if:
-  - condition: template
-    value_template: "{{ importance_filtering and not is_manual_trigger }}"
-  then:
-  - service: llmvision.image_analyzer
-    data:
-      image_entity: ["{{ triggered_camera }}"]
-      provider: "{{ primary_provider }}"
-      model: "{{ primary_model }}"
-      message: "{{ importance_prompt }}"
-      include_filename: false
-      target_width: !input target_width
-      max_tokens: 5
-    response_variable: importance_result
-    continue_on_error: true
-
-  # Check if importance analysis failed
-  - if:
-    - condition: template
-      value_template: "{{ importance_result is not defined or importance_result.response_text is not defined }}"
-    then:
-    - if:
-      - condition: template
-        value_template: "{{ show_api_errors }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "⚠️ {{ time_prefix }}{{ camera_name }} - Importance API failed ({{ primary_provider }} {{ primary_model }}), proceeding anyway"
-    # Set fallback importance for filtering logic
-    - variables:
-        importance_result: 
-          response_text: "time-sensitive"
-
-  # Check if event meets minimum importance threshold - STOP SILENTLY IF NOT
-  - if:
-    - condition: template
-      value_template: >
-        {% set detected = importance_result.response_text.lower().strip() %}
-        {% set min_level = minimum_importance %}
-        {% if min_level == "passive" %}
-          {{ false }}
-        {% elif min_level == "time-sensitive" %}
-          {{ detected not in ["time-sensitive", "critical"] }}
-        {% elif min_level == "critical" %}
-          {{ detected != "critical" }}
-        {% else %}
-          {{ false }}
-        {% endif %}
-    then:
-    - if:
-      - condition: template
-        value_template: "{{ show_filtered_events }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "🔇 {{ time_prefix }}{{ camera_name }} - Filtered ({{ importance_result.response_text }}) - no alert sent"
-    - stop: "Event filtered - importance too low"
-
 # Message 1: Combined timestamp + camera + image + analyzing caption
 - service: telegram_bot.send_photo
   data:
     target: !input telegram_target
     file: "{{ snapshot_path }}"
-    caption: "{{ time_prefix }}{{ camera_name }} - analyzing... ({{ primary_provider }} {{ primary_model }})"
+    caption: "{{ time_prefix }}{{ camera_name }} - analyzing with {{ primary_provider }} {{ primary_model }}..."
 
-# Main AI Analysis with comprehensive error handling
+# Main AI Analysis with comprehensive error handling and debugging
 - service: llmvision.stream_analyzer
   data:
     image_entity: ["{{ triggered_camera }}"]
     duration: !input duration
-    provider: "{{ primary_provider }}"
+    provider: !input llmvision_provider
     model: "{{ primary_model }}"
     message: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise."
     max_frames: !input max_frames
@@ -436,6 +360,16 @@ action:
   response_variable: analysis
   continue_on_error: true
 
+# Debug the analysis result
+- if:
+  - condition: template
+    value_template: "{{ show_api_errors }}"
+  then:
+  - service: telegram_bot.send_message
+    data:
+      target: !input telegram_target
+      message: "🔍 Debug Analysis Result:\nDefined: {{ analysis is defined }}\nResponse exists: {{ analysis.response_text is defined if analysis is defined else 'N/A' }}\nResponse content: {{ analysis.response_text if (analysis is defined and analysis.response_text is defined) else 'None' }}"
+
 # Handle AI analysis result or fallback
 - choose:
   # Success - AI analysis worked
@@ -446,21 +380,17 @@ action:
     - service: telegram_bot.send_message
       data:
         target: !input telegram_target
-        message: "{{ analysis.response_text }}"
+        message: "✅ {{ analysis.response_text }}"
   
   # Fallback - AI analysis failed
   - conditions:
     - condition: template
       value_template: "{{ enable_fallback }}"
     sequence:
-    - if:
-      - condition: template
-        value_template: "{{ show_api_errors }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "🚨 {{ time_prefix }}{{ camera_name }} - {{ primary_provider }} {{ primary_model }} failed (quota/service error) - using fallback"
+    - service: telegram_bot.send_message
+      data:
+        target: !input telegram_target
+        message: "🚨 {{ time_prefix }}{{ camera_name }} - Analysis failed - Fallback: {{ fallback_mode }}"
     
     # Send fallback notification based on mode
     - choose:
