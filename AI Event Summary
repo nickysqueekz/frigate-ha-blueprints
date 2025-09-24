@@ -1,9 +1,9 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5.3)
+  name: AI Event Summary with Telegram (Enhanced v1.5.2)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
-  description: 'AI-powered camera event summaries with smart filtering, timeline storage, and memory integration.'
+  description: 'AI-powered camera event summaries with smart filtering, timeline storage, memory integration, and API fallback handling.'
   domain: automation
   input:
     telegram_section:
@@ -133,6 +133,35 @@ blueprint:
           default: true
           selector:
             boolean: {}
+    fallback_section:
+      name: API Fallback Settings
+      icon: mdi:backup-restore
+      input:
+        enable_fallback:
+          name: Enable API Fallback
+          description: Use fallback behavior when AI API fails (quota exceeded, service unavailable, etc.)
+          default: true
+          selector:
+            boolean: {}
+        fallback_mode:
+          name: Fallback Mode
+          description: What to do when AI analysis fails
+          default: "simple_notification"
+          selector:
+            select:
+              options:
+                - label: "Simple Notification (Motion detected only)"
+                  value: "simple_notification"
+                - label: "Time-based Message (Morning=delivery, Evening=visitor, etc.)"
+                  value: "time_based"
+                - label: "No Notification (Silent failure)"
+                  value: "silent"
+        show_api_errors:
+          name: Show API Error Messages
+          description: Send error details to Telegram when API fails (for debugging)
+          default: false
+          selector:
+            boolean: {}
     filtering_section:
       name: Smart Filtering
       icon: mdi:filter
@@ -176,6 +205,9 @@ variables:
   use_memory: !input use_memory
   store_timeline: !input store_timeline
   notification_time: !input notification_time
+  enable_fallback: !input enable_fallback
+  fallback_mode: !input fallback_mode
+  show_api_errors: !input show_api_errors
   
   is_manual_trigger: "{{ trigger is not defined }}"
   
@@ -210,6 +242,19 @@ variables:
   last_triggered: "{{ this.attributes.last_triggered if this.attributes.last_triggered else '1970-01-01T00:00:00+00:00' }}"
   seconds_since_last: "{{ (as_timestamp(now()) - as_timestamp(last_triggered)) | int }}"
   cooldown_active: "{{ not is_manual_trigger and seconds_since_last < cooldown_seconds }}"
+
+  # Fallback message based on time of day
+  time_based_message: >
+    {% set hour = now().hour %}
+    {% if hour >= 6 and hour < 12 %}
+      "Morning delivery or service visit detected"
+    {% elif hour >= 12 and hour < 17 %}
+      "Daytime visitor or delivery detected"
+    {% elif hour >= 17 and hour < 22 %}
+      "Evening visitor detected"
+    {% else %}
+      "Late night motion detected"
+    {% endif %}
 
   # AI Prompts
   importance_prompt: >
@@ -268,7 +313,7 @@ action:
   data:
     filename: "{{ snapshot_path }}"
 
-# Importance Classification (if enabled) - SILENT CHECK
+# Importance Classification (if enabled) - WITH ERROR HANDLING
 - if:
   - condition: template
     value_template: "{{ importance_filtering and not is_manual_trigger }}"
@@ -283,6 +328,25 @@ action:
       target_width: !input target_width
       max_tokens: 5
     response_variable: importance_result
+    continue_on_error: true
+
+  # Check if importance analysis failed
+  - if:
+    - condition: template
+      value_template: "{{ importance_result is not defined or importance_result.response_text is not defined }}"
+    then:
+    - if:
+      - condition: template
+        value_template: "{{ show_api_errors }}"
+      then:
+      - service: telegram_bot.send_message
+        data:
+          target: !input telegram_target
+          message: "⚠️ {{ time_prefix }}{{ camera_name }} - Importance API failed, proceeding anyway"
+    # Set fallback importance for filtering logic
+    - variables:
+        importance_result: 
+          response_text: "time-sensitive"
 
   # Check if event meets minimum importance threshold - STOP SILENTLY IF NOT
   - if:
@@ -317,7 +381,7 @@ action:
     file: "{{ snapshot_path }}"
     caption: "{{ time_prefix }}{{ camera_name }} - analyzing..."
 
-# Main AI Analysis (back to simple version)
+# Main AI Analysis with comprehensive error handling
 - service: llmvision.stream_analyzer
   data:
     image_entity: ["{{ triggered_camera }}"]
@@ -333,9 +397,60 @@ action:
     generate_title: !input store_timeline
     expose_images: !input store_timeline
   response_variable: analysis
+  continue_on_error: true
 
-# Message 2: AI Analysis result only
-- service: telegram_bot.send_message
-  data:
-    target: !input telegram_target
-    message: "{{ analysis.response_text }}"
+# Handle AI analysis result or fallback
+- choose:
+  # Success - AI analysis worked
+  - conditions:
+    - condition: template
+      value_template: "{{ analysis is defined and analysis.response_text is defined and analysis.response_text != '' }}"
+    sequence:
+    - service: telegram_bot.send_message
+      data:
+        target: !input telegram_target
+        message: "{{ analysis.response_text }}"
+  
+  # Fallback - AI analysis failed
+  - conditions:
+    - condition: template
+      value_template: "{{ enable_fallback }}"
+    sequence:
+    - if:
+      - condition: template
+        value_template: "{{ show_api_errors }}"
+      then:
+      - service: telegram_bot.send_message
+        data:
+          target: !input telegram_target
+          message: "🚨 {{ time_prefix }}{{ camera_name }} - AI API failed (quota/service error) - using fallback"
+    
+    # Send fallback notification based on mode
+    - choose:
+      - conditions:
+        - condition: template
+          value_template: "{{ fallback_mode == 'simple_notification' }}"
+        sequence:
+        - service: telegram_bot.send_message
+          data:
+            target: !input telegram_target
+            message: "{{ camera_name }} motion detected (AI unavailable)"
+      
+      - conditions:
+        - condition: template
+          value_template: "{{ fallback_mode == 'time_based' }}"
+        sequence:
+        - service: telegram_bot.send_message
+          data:
+            target: !input telegram_target
+            message: "{{ time_based_message }} (AI unavailable)"
+      
+      # Silent mode - do nothing
+      default: []
+
+  # No fallback enabled - send error message
+  default:
+  - service: telegram_bot.send_message
+    data:
+      target: !input telegram_target
+      message: "❌ {{ time_prefix }}{{ camera_name }} - AI analysis failed and no fallback configured"
