@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5.4.2)
+  name: AI Event Summary with Telegram (Enhanced v1.5.5)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -73,40 +73,40 @@ blueprint:
       name: AI Analysis Settings
       icon: mdi:brain
       input:
-        provider_config:
-          name: LLM Provider Configuration
-          description: Select your configured LLMVision provider
+        provider:
+          name: LLM Provider
+          description: Provider for AI analysis
           selector:
             config_entry:
               integration: llmvision
-        provider_model:
-          name: Provider & Model
-          description: Select the AI provider and model combination to use
-          default: "google|gemini-2.5-flash"
+        provider_model_combo:
+          name: Provider & Model Selection
+          description: Combined provider and model selection
+          default: "gemini-2.5-flash-lite"
           selector:
             select:
               options:
-                # Google Options
-                - label: "Google Gemini 2.5 Flash (Fast, affordable)"
-                  value: "google|gemini-2.5-flash"
-                - label: "Google Gemini 2.5 Flash Lite (Ultra-fast)"
-                  value: "google|gemini-2.5-flash-lite"
-                - label: "Google Gemini 2.5 Pro (Most capable)"
-                  value: "google|gemini-2.5-pro"
-                # OpenAI Options
-                - label: "OpenAI GPT-4o (Intelligent, flexible)"
-                  value: "openai|gpt-4o"
-                - label: "OpenAI GPT-4o Mini (Fast, affordable)"
-                  value: "openai|gpt-4o-mini"
-                # Anthropic Options
-                - label: "Anthropic Claude 3.5 Sonnet (High reasoning)"
-                  value: "anthropic|claude-3-5-sonnet-20241022"
-                # For manual entry if needed
-                - label: "Custom (use manual model field below)"
-                  value: "custom|custom"
-        manual_model:
-          name: Manual Model Name (Optional)
-          description: Only used if 'Custom' is selected above. Enter the exact model name.
+                # Google Gemini Models
+                - label: "Gemini 2.5 Flash (Fast, affordable)"
+                  value: "gemini-2.5-flash"
+                - label: "Gemini 2.5 Flash Lite (Ultra-fast, basic)"
+                  value: "gemini-2.5-flash-lite"
+                - label: "Gemini 2.5 Pro (Most capable)"
+                  value: "gemini-2.5-pro"
+                # OpenAI Models
+                - label: "GPT-4o (Intelligent, flexible)"
+                  value: "gpt-4o"
+                - label: "GPT-4o Mini (Fast, affordable)"
+                  value: "gpt-4o-mini"
+                # Claude Models
+                - label: "Claude 3.5 Sonnet (High reasoning)"
+                  value: "claude-3-5-sonnet-20241022"
+                # Custom entry
+                - label: "Custom (enter manually below)"
+                  value: "custom"
+        model:
+          name: Model (Manual Entry)
+          description: Used if 'Custom' selected above, or leave blank to use dropdown selection
           default: ""
           selector:
             text: {}
@@ -233,19 +233,19 @@ variables:
   enable_fallback: !input enable_fallback
   fallback_mode: !input fallback_mode
   show_api_errors: !input show_api_errors
-  provider_config: !input provider_config
-  provider_model: !input provider_model
-  manual_model: !input manual_model
+  provider_model_combo: !input provider_model_combo
+  manual_model: !input model
   
   is_manual_trigger: "{{ trigger is not defined }}"
   
-  # Parse the combined provider|model selection
-  selected_provider: "{{ provider_model.split('|')[0] }}"
-  selected_model: >
-    {% if provider_model.split('|')[1] == 'custom' %}
-      {{ manual_model if manual_model != '' else 'gpt-4o-mini' }}
+  # Determine final model to use - prioritize manual entry, then dropdown
+  final_model: >
+    {% if manual_model != "" %}
+      {{ manual_model }}
+    {% elif provider_model_combo == "custom" %}
+      gpt-4o-mini
     {% else %}
-      {{ provider_model.split('|')[1] }}
+      {{ provider_model_combo }}
     {% endif %}
   
   # Time formatting
@@ -274,23 +274,12 @@ variables:
   camera_name: '{{ triggered_camera.replace("camera.", "").replace("_", " ").title() }}'
   snapshot_path: '/config/www/snapshots/{{ triggered_camera.replace("camera.", "") }}_snapshot.jpg'
   
-  # FIXED cooldown logic - per camera tracking
+  # Simplified cooldown using automation attributes
   cooldown_seconds: "{{ cooldown_minutes * 60 }}"
-  automation_last_triggered: "{{ this.attributes.last_triggered }}"
+  last_triggered: "{{ this.attributes.last_triggered if this.attributes.last_triggered else '1970-01-01T00:00:00+00:00' }}"
+  seconds_since_last: "{{ (as_timestamp(now()) - as_timestamp(last_triggered)) | int }}"
+  cooldown_active: "{{ not is_manual_trigger and seconds_since_last < cooldown_seconds }}"
   
-  # Check if we're in cooldown for this specific camera
-  cooldown_active: >
-    {% if is_manual_trigger or cooldown_minutes == 0 %}
-      {{ false }}
-    {% else %}
-      {% set last_time = this.attributes.last_triggered %}
-      {% if last_time %}
-        {{ (as_timestamp(now()) - as_timestamp(last_time)) < cooldown_seconds }}
-      {% else %}
-        {{ false }}
-      {% endif %}
-    {% endif %}
-
   # Fallback message based on time of day
   time_based_message: >
     {% set hour = now().hour %}
@@ -303,7 +292,7 @@ variables:
     {% else %}
       "Late night motion detected"
     {% endif %}
-
+  
   # AI Prompts
   importance_prompt: >
     Analyze this security camera image and classify the event importance level.
@@ -337,9 +326,9 @@ action:
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }} ({{ selected_provider }}/{{ selected_model }})"
+      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }} ({{ final_model }})"
 
-# Check cooldown with debug info (skip for manual triggers)
+# Check cooldown (skip for manual triggers) - SILENT by default
 - if:
   - condition: template
     value_template: "{{ cooldown_active }}"
@@ -351,159 +340,8 @@ action:
     - service: telegram_bot.send_message
       data:
         target: !input telegram_target
-        message: |
-          ⏰ {{ time_prefix }}{{ camera_name }} cooldown active
-          Last triggered: {{ automation_last_triggered }}
-          Current time: {{ now().isoformat() }}
-          Seconds since: {{ (as_timestamp(now()) - as_timestamp(automation_last_triggered)) | int if automation_last_triggered else 'N/A' }}
-          Cooldown period: {{ cooldown_seconds }}s
+        message: "⏰ {{ time_prefix }}{{ camera_name }} cooldown active ({{ seconds_since_last }}s of {{ cooldown_seconds }}s) - skipping"
   - stop: "Cooldown active for {{ camera_name }}"
 
 # Take snapshot for importance analysis
-- service: camera.snapshot
-  target:
-    entity_id: "{{ triggered_camera }}"
-  data:
-    filename: "{{ snapshot_path }}"
-
-# Importance Classification (if enabled) - WITH ERROR HANDLING
-- if:
-  - condition: template
-    value_template: "{{ importance_filtering and not is_manual_trigger }}"
-  then:
-  - service: llmvision.image_analyzer
-    data:
-      image_entity: ["{{ triggered_camera }}"]
-      provider: !input provider_config
-      model: "{{ selected_model }}"
-      message: "{{ importance_prompt }}"
-      include_filename: false
-      target_width: !input target_width
-      max_tokens: 5
-    response_variable: importance_result
-    continue_on_error: true
-
-  # Check if importance analysis failed
-  - if:
-    - condition: template
-      value_template: "{{ importance_result is not defined or importance_result.response_text is not defined }}"
-    then:
-    - if:
-      - condition: template
-        value_template: "{{ show_api_errors }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "⚠️ {{ time_prefix }}{{ camera_name }} - Importance API failed, proceeding anyway"
-    # Set fallback importance for filtering logic
-    - variables:
-        importance_result: 
-          response_text: "time-sensitive"
-
-  # Check if event meets minimum importance threshold - STOP SILENTLY IF NOT
-  - if:
-    - condition: template
-      value_template: >
-        {% set detected = importance_result.response_text.lower().strip() %}
-        {% set min_level = minimum_importance %}
-        {% if min_level == "passive" %}
-          {{ false }}
-        {% elif min_level == "time-sensitive" %}
-          {{ detected not in ["time-sensitive", "critical"] }}
-        {% elif min_level == "critical" %}
-          {{ detected != "critical" }}
-        {% else %}
-          {{ false }}
-        {% endif %}
-    then:
-    - if:
-      - condition: template
-        value_template: "{{ show_filtered_events }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "🔇 {{ time_prefix }}{{ camera_name }} - Filtered ({{ importance_result.response_text }}) - no alert sent"
-    - stop: "Event filtered - importance too low"
-
-# Message 1: Combined timestamp + camera + image + analyzing caption
-- service: telegram_bot.send_photo
-  data:
-    target: !input telegram_target
-    file: "{{ snapshot_path }}"
-    caption: "{{ time_prefix }}{{ camera_name }} - analyzing..."
-
-# Main AI Analysis with comprehensive error handling
-- service: llmvision.stream_analyzer
-  data:
-    image_entity: ["{{ triggered_camera }}"]
-    duration: !input duration
-    provider: !input provider_config
-    model: "{{ selected_model }}"
-    message: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise."
-    max_frames: !input max_frames
-    target_width: !input target_width
-    max_tokens: !input max_tokens
-    use_memory: !input use_memory
-    remember: !input store_timeline
-    generate_title: !input store_timeline
-    expose_images: !input store_timeline
-  response_variable: analysis
-  continue_on_error: true
-
-# Handle AI analysis result or fallback
-- choose:
-  # Success - AI analysis worked
-  - conditions:
-    - condition: template
-      value_template: "{{ analysis is defined and analysis.response_text is defined and analysis.response_text != '' }}"
-    sequence:
-    - service: telegram_bot.send_message
-      data:
-        target: !input telegram_target
-        message: "{{ analysis.response_text }}"
-  
-  # Fallback - AI analysis failed
-  - conditions:
-    - condition: template
-      value_template: "{{ enable_fallback }}"
-    sequence:
-    - if:
-      - condition: template
-        value_template: "{{ show_api_errors }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "🚨 {{ time_prefix }}{{ camera_name }} - AI API failed (quota/service error) - using fallback"
-    
-    # Send fallback notification based on mode - FIXED YAML SYNTAX
-    - choose:
-      - conditions:
-        - condition: template
-          value_template: "{{ fallback_mode == 'simple_notification' }}"
-        sequence:
-        - service: telegram_bot.send_message
-          data:
-            target: !input telegram_target
-            message: "{{ camera_name }} motion detected (AI unavailable)"
-      
-      - conditions:
-        - condition: template
-          value_template: "{{ fallback_mode == 'time_based' }}"
-        sequence:
-        - service: telegram_bot.send_message
-          data:
-            target: !input telegram_target
-            message: "{{ time_based_message }} (AI unavailable)"
-      
-      # Silent mode - do nothing
-      default: []
-
-  # No fallback enabled - send error message
-  default:
-  - service: telegram_bot.send_message
-    data:
-      target: !input telegram_target
-      message: "❌ {{ time_prefix }}{{ camera_name }} - AI analysis failed and no fallback configured"
+- service: camera.
