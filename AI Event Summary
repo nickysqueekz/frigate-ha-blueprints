@@ -1,9 +1,9 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5.7)
+  name: AI Event Summary with Telegram (Enhanced v1.6)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
-  description: 'AI-powered camera event summaries with smart filtering, timeline storage, memory integration, and API fallback handling.'
+  description: 'AI-powered camera event summaries with smart filtering, timeline storage, memory integration, API fallback handling, and Frigate clip/GIF support.'
   domain: automation
   input:
     telegram_section:
@@ -37,6 +37,28 @@ blueprint:
             number:
               min: 0
               max: 3600
+              step: 1
+        media_type:
+          name: Media Type
+          description: Type of media to send with notifications
+          default: "snapshot"
+          selector:
+            select:
+              options:
+                - label: "Static Snapshot"
+                  value: "snapshot"
+                - label: "Frigate Clip (MP4)"
+                  value: "clip"
+                - label: "Frigate GIF"
+                  value: "gif"
+        wait_for_frigate:
+          name: Wait for Frigate Processing
+          description: Time to wait for Frigate to generate clip/GIF (seconds)
+          default: 5
+          selector:
+            number:
+              min: 1
+              max: 30
               step: 1
     camera_section:
       name: Camera Settings
@@ -72,6 +94,12 @@ blueprint:
               min: 0
               max: 60
               step: 1
+        frigate_base_url:
+          name: Frigate Base URL
+          description: Base URL for Frigate (e.g., http://frigate.local:5000)
+          default: "http://frigate.local:5000"
+          selector:
+            text: {}
     ai_section:
       name: AI Analysis Settings
       icon: mdi:brain
@@ -168,7 +196,7 @@ blueprint:
                   value: "silent"
         show_api_errors:
           name: Show API Error Messages
-          description: Send error details to Telegram when API fails (for debugging)
+          description: Send error details to Telegram when AI fails (for debugging)
           default: false
           selector:
             boolean: {}
@@ -205,10 +233,13 @@ variables:
   fallback_mode: !input fallback_mode
   show_api_errors: !input show_api_errors
   ai_prompt: !input ai_prompt
+  media_type: !input media_type
+  wait_for_frigate: !input wait_for_frigate
+  frigate_base_url: !input frigate_base_url
   
   is_manual_trigger: "{{ trigger is not defined }}"
   
-  # FIXED: Simplified camera entity detection (matches reference blueprint logic)
+  # Camera entity detection
   camera_entity: >
     {% if motion_sensors and not trigger.entity_id.startswith("camera") %}
       {% set index = motion_sensors.index(trigger.entity_id) %}
@@ -217,7 +248,7 @@ variables:
       {{ trigger.entity_id }}
     {% endif %}
   
-  # Time formatting with proper template
+  # Time formatting
   time_suffix: >
     {% if notification_time == "12hour" %}
       {{ " at " + now().strftime("%-I:%M %p") }}
@@ -228,9 +259,19 @@ variables:
     {% endif %}
   
   camera_name: '{{ camera_entity.replace("camera.", "").replace("_", " ").title() }}'
-  snapshot_path: '/config/www/snapshots/{{ camera_entity.replace("camera.", "") }}_snapshot.jpg'
+  frigate_camera_name: '{{ camera_entity.replace("camera.", "") }}'
+  snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_snapshot.jpg'
   
-  # Cooldown duration in seconds for the delay at the end
+  # Frigate media paths
+  event_id: "{{ trigger.payload_json.after.id if trigger.platform == 'mqtt' else now().strftime('%Y%m%d_%H%M%S') }}"
+  frigate_clip_url: "{{ frigate_base_url }}/api/events/{{ event_id }}/clip.mp4"
+  frigate_gif_url: "{{ frigate_base_url }}/api/events/{{ event_id }}/preview.gif"
+  
+  # Local file paths for downloaded media
+  clip_path: '/config/www/snapshots/{{ frigate_camera_name }}_{{ event_id }}.mp4'
+  gif_path: '/config/www/snapshots/{{ frigate_camera_name }}_{{ event_id }}.gif'
+  
+  # Cooldown duration in seconds
   cooldown_seconds: "{{ cooldown_minutes * 60 }}"
   
   # Fallback message based on time of day
@@ -246,7 +287,7 @@ variables:
       Late night motion detected
     {% endif %}
   
-  # FIXED: Simplified importance prompt (matches reference style)
+  # Importance prompt
   importance_prompt: >
     Classify the security event based on this image. Choose from the following options: "passive" for unimportant events, "time-sensitive" for notable but non-critical events such as a person at the front door, and "critical" only for potential burglaries or highly suspicious activity. Respond with one of these options exactly, without additional explanation.
 
@@ -274,7 +315,7 @@ action:
       target: !input telegram_target
       message: "🔧 Manual trigger for {{ camera_name }}{{ time_suffix }}"
 
-# FIXED: Importance filtering BEFORE notifications (matches reference blueprint flow)
+# Importance filtering BEFORE notifications
 - choose:
   - conditions:
     - condition: template
@@ -292,7 +333,7 @@ action:
       response_variable: importance
       continue_on_error: true
 
-# FIXED: Stop if event is passive (matches reference blueprint logic)
+# Stop if event is passive
 - choose:
   - conditions:
     - condition: template
@@ -308,27 +349,114 @@ action:
           message: "🔇 {{ camera_name }}{{ time_suffix }} - Filtered (passive) - no alert sent"
     - stop: "Event is not important"
 
-# FIXED: Notification cooldown check (matches reference blueprint)
+# Notification cooldown check
 - if:
   - condition: template
     value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}"
   then:
   
-  # Take snapshot
-  - service: camera.snapshot
-    target:
-      entity_id: "{{ camera_entity }}"
-    data:
-      filename: "{{ snapshot_path }}"
+  # Wait for Frigate to process the event (if using clip/gif)
+  - if:
+    - condition: template
+      value_template: "{{ media_type in ['clip', 'gif'] }}"
+    then:
+    - delay:
+        seconds: !input wait_for_frigate
+  
+  # Send media based on type selection
+  - choose:
+    # Static snapshot
+    - conditions:
+      - condition: template
+        value_template: "{{ media_type == 'snapshot' }}"
+      sequence:
+      - service: camera.snapshot
+        target:
+          entity_id: "{{ camera_entity }}"
+        data:
+          filename: "{{ snapshot_path }}"
+      
+      - service: telegram_bot.send_photo
+        data:
+          target: !input telegram_target
+          file: "{{ snapshot_path }}"
+          caption: "{{ camera_name }}{{ time_suffix }} - analyzing..."
+    
+    # Frigate Clip (MP4)
+    - conditions:
+      - condition: template
+        value_template: "{{ media_type == 'clip' }}"
+      sequence:
+      # Download Frigate clip
+      - service: downloader.download_file
+        data:
+          url: "{{ frigate_clip_url }}"
+          filename: "{{ clip_path }}"
+        continue_on_error: true
+      
+      # Send clip or fallback to snapshot
+      - choose:
+        - conditions:
+          - condition: template
+            value_template: "{{ states('sensor.file_size_' + frigate_camera_name + '_' + event_id) | default(0) | int > 0 }}"
+          sequence:
+          - service: telegram_bot.send_video
+            data:
+              target: !input telegram_target
+              file: "{{ clip_path }}"
+              caption: "{{ camera_name }}{{ time_suffix }} - analyzing..."
+        default:
+        # Fallback to snapshot
+        - service: camera.snapshot
+          target:
+            entity_id: "{{ camera_entity }}"
+          data:
+            filename: "{{ snapshot_path }}"
+        
+        - service: telegram_bot.send_photo
+          data:
+            target: !input telegram_target
+            file: "{{ snapshot_path }}"
+            caption: "{{ camera_name }}{{ time_suffix }} - analyzing... (clip unavailable)"
+    
+    # Frigate GIF
+    - conditions:
+      - condition: template
+        value_template: "{{ media_type == 'gif' }}"
+      sequence:
+      # Download Frigate GIF
+      - service: downloader.download_file
+        data:
+          url: "{{ frigate_gif_url }}"
+          filename: "{{ gif_path }}"
+        continue_on_error: true
+      
+      # Send GIF or fallback to snapshot
+      - choose:
+        - conditions:
+          - condition: template
+            value_template: "{{ states('sensor.file_size_' + frigate_camera_name + '_' + event_id) | default(0) | int > 0 }}"
+          sequence:
+          - service: telegram_bot.send_animation
+            data:
+              target: !input telegram_target
+              file: "{{ gif_path }}"
+              caption: "{{ camera_name }}{{ time_suffix }} - analyzing..."
+        default:
+        # Fallback to snapshot
+        - service: camera.snapshot
+          target:
+            entity_id: "{{ camera_entity }}"
+          data:
+            filename: "{{ snapshot_path }}"
+        
+        - service: telegram_bot.send_photo
+          data:
+            target: !input telegram_target
+            file: "{{ snapshot_path }}"
+            caption: "{{ camera_name }}{{ time_suffix }} - analyzing... (GIF unavailable)"
 
-  # Message 1: Combined timestamp + camera + image + analyzing caption
-  - service: telegram_bot.send_photo
-    data:
-      target: !input telegram_target
-      file: "{{ snapshot_path }}"
-      caption: "{{ camera_name }}{{ time_suffix }} - analyzing..."
-
-  # Main AI Analysis with comprehensive error handling
+  # Main AI Analysis
   - service: llmvision.stream_analyzer
     data:
       image_entity: ["{{ camera_entity }}"]
@@ -403,7 +531,7 @@ action:
         target: !input telegram_target
         message: "❌ {{ camera_name }}{{ time_suffix }} - AI analysis failed and no fallback configured"
 
-# PROPER COOLDOWN: Delay at the end (matches reference blueprint)
+# Automation cooldown delay
 - if:
   - condition: template
     value_template: "{{ not is_manual_trigger and cooldown_minutes > 0 }}"
