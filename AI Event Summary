@@ -1,500 +1,320 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.6.2)
-  author: valentinfrlch (modified for Telegram - rebuilt)
+  name: AI Event Summary (Telegram Bot v1.6.3)
+  author: Perplexity AI - QC and fixes with safer template, defaults, and anonymized examples
   homeassistant:
     min_version: 2024.10.0
-  description: 'AI-powered camera event summaries with smart filtering, timeline storage, memory integration, API fallback handling, and Frigate clip/GIF support.'
+  description: >
+    AI-powered summaries for cameras with Telegram notifications.
+    Includes safer template handling, no real API keys in defaults,
+    cooldown set to 1 minute, and improved default parameters.
   domain: automation
   input:
-    telegram_section:
-      name: Telegram Settings
-      icon: mdi:telegram
-      input:
-        telegram_target:
-          name: Telegram Chat ID
-          description: The chat ID to send notifications to
-          selector:
-            text: {}
-        notification_time:
-          name: Notification Time Format
-          description: Add time to notification messages
-          default: "12hour"
-          selector:
-            select:
-              options:
-                - label: "No Time Added"
-                  value: "none"
-                - label: "12 Hour Format (3:45 PM)"
-                  value: "12hour"
-                - label: "24 Hour Format (15:45)"
-                  value: "24hour"
-        delay_notification:
-          name: Notification Cooldown
-          description: Time to wait before sending another notification (separate from automation cooldown)
-          default:
-            seconds: 60
-          selector:
-            duration: {}
-        media_type:
-          name: Media Type
-          description: Type of media to send with notifications
-          default: "snapshot"
-          selector:
-            select:
-              options:
-                - label: "Static Snapshot"
-                  value: "snapshot"
-                - label: "Frigate Clip (MP4) - Real events only"
-                  value: "clip"
-                - label: "Frigate GIF - Real events only"
-                  value: "gif"
-        wait_for_frigate:
-          name: Wait for Frigate Processing
-          description: Time to wait for Frigate to generate clip/GIF
-          default:
-            seconds: 8
-          selector:
-            duration: {}
-    camera_section:
-      name: Camera Settings
+    run_conditions:
+      name: Run Conditions
+      description: Conditions that must be met for automation to run.
+      default: []
+      selector:
+        condition: {}
+    cooldown:
+      name: Cooldown
+      description: Time to wait between notifications.
+      default:
+        minutes: 1
+      selector:
+        duration: {}
+    camera_sensor_section:
+      name: Camera & Sensor Settings
+      description: Configure cameras and motion sensors.
       icon: mdi:camera
       input:
         camera_entities:
           name: Camera Entities
-          description: Camera entities to monitor (can select multiple)
-          selector:
-            entity:
-              multiple: true
-              domain: camera
-        motion_sensors:
-          name: Motion Sensors (Optional)
-          description: Motion sensors for cameras (same order as cameras). Leave empty if cameras change state directly.
+          description: Cameras to monitor.
           default: []
           selector:
             entity:
+              domain: camera
               multiple: true
-              domain: binary_sensor
         trigger_state:
-          name: Camera Trigger State
-          description: State that triggers the automation for cameras
-          default: "recording"
+          name: Trigger State
+          description: State to trigger automation.
+          default: recording
           selector:
-            text: {}
-        cooldown:
-          name: Automation Cooldown
-          description: Time to wait before running automation again after completion
-          default:
-            minutes: 5
+            text:
+              multiline: false
+        motion_sensors:
+          name: Motion Sensors
+          description: Linked motion sensors.
+          default: []
           selector:
-            duration: {}
-        frigate_base_url:
-          name: Frigate Base URL
-          description: Base URL for Frigate (e.g., http://frigate.local:5000)
-          default: "http://frigate.local:5000"
+            entity:
+              domain: binary_sensor
+              multiple: true
+        duration:
+          name: Analysis Duration (seconds)
+          description: Duration for AI video analysis.
+          default: 15
           selector:
-            text: {}
+            number:
+              min: 1
+              max: 60
+              step: 1
+        max_frames:
+          name: Max Frames
+          description: Number of frames to analyze.
+          default: 10
+          selector:
+            number:
+              min: 1
+              max: 60
+              step: 1
     ai_section:
-      name: AI Analysis Settings
+      name: AI Settings
       icon: mdi:brain
+      collapsed: true
       input:
         provider:
-          name: LLM Provider
-          description: Provider for AI analysis
+          name: AI Provider
+          description: AI provider for analysis
           selector:
             config_entry:
               integration: llmvision
         model:
           name: Model
-          description: Model to use
-          default: "gpt-4o-mini"
+          description: AI model to use
+          default: gemini-2.5-flash-lite
           selector:
-            text: {}
-        ai_prompt:
-          name: AI Analysis Prompt
-          description: Prompt sent to AI for analyzing camera footage
-          default: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise."
+            text:
+              multiline: false
+        message:
+          name: AI Prompt
+          description: Prompt for AI analysis
+          default: >
+            Summarize the events focusing on moving subjects. If no motion, reply 'No activity observed.'
           selector:
             text:
               multiline: true
-        duration:
-          name: Analysis Duration
-          description: How long to record for analysis
-          default:
-            seconds: 5
-          selector:
-            duration: {}
-        max_frames:
-          name: Maximum Frames
-          description: Maximum number of frames to analyze
-          default: 3
+        max_tokens:
+          name: Max Tokens
+          description: Max tokens to generate for summary
+          default: 100
           selector:
             number:
               min: 1
-              max: 15
+              max: 300
               step: 1
-        target_width:
-          name: Image Width
-          description: Resize images to this width (lower = faster, less detail)
-          default: 1280
+        remember:
+          name: Store event in Timeline
+          description: Keep this event for queries.
+          default: true
           selector:
-            number:
-              min: 512
-              max: 1920
-              step: 64
-        max_tokens:
-          name: Max Response Length
-          description: Maximum length of AI response (higher = more detailed)
-          default: 50
-          selector:
-            number:
-              min: 10
-              max: 200
-              step: 10
+            boolean: {}
         use_memory:
-          name: Use Memory
-          description: Use information stored in memory to provide additional context (requires LLMVision memory setup)
+          name: Use Memory Context
           default: false
           selector:
             boolean: {}
-        store_timeline:
-          name: Store in Timeline
-          description: Store events in Home Assistant timeline for review
-          default: true
-          selector:
-            boolean: {}
-    object_section:
-      name: Object Detection Settings
-      icon: mdi:target
+    notification_section:
+      name: Notification Settings
+      icon: mdi:telegram
+      collapsed: true
       input:
-        use_object_filter:
-          name: Enable Object Filtering
-          description: Only send notifications when specific objects are detected
-          default: false
+        telegram_config_entry_id:
+          name: Telegram Bot Config Entry ID
+          description: Config entry ID of your Telegram bot (example below anonymized)
+          default: telegram_bot_xxxxxxxx_xxxxxxxx
           selector:
-            boolean: {}
-        required_objects:
-          name: Required Objects
-          description: Only send alerts when these objects are detected (comma-separated list). Leave empty to disable.
-          default: "person,car,truck,bicycle,motorcycle,dog,cat"
+            text:
+              multiline: false
+        telegram_target:
+          name: Telegram Chat ID(s)
+          description: Chat ID or JSON list of chat IDs (e.g., 123456789 or [123456789,987654321])
+          default: "123456789"
           selector:
-            text: {}
-        blocked_objects:
-          name: Blocked Objects  
-          description: Never send alerts when only these objects are detected (comma-separated list). Leave empty to disable.
-          default: ""
+            text:
+              multiline: false
+        condition_notify:
+          name: Condition to Notify
+          description: Optional conditions before notification is sent.
+          default: []
           selector:
-            text: {}
-    fallback_section:
-      name: API Fallback Settings
-      icon: mdi:backup-restore
-      input:
-        enable_fallback:
-          name: Enable API Fallback
-          description: Use fallback behavior when AI API fails (quota exceeded, service unavailable, etc.)
-          default: true
+            condition: {}
+        delay_notification:
+          name: Notification Cooldown
+          default: 60
           selector:
-            boolean: {}
-        fallback_mode:
-          name: Fallback Mode
-          description: What to do when AI analysis fails
-          default: "simple_notification"
+            number:
+              min: 0
+              max: 86400
+              unit_of_measurement: seconds
+              mode: box
+              step: 1
+        file_path:
+          name: Snapshot File Path
+          description: Path to snapshot image for Telegram photo.
+          default: /media/snapshots/{{ camera_file_path }}/last_motion.jpg
           selector:
-            select:
-              options:
-                - label: "Simple Notification (Motion detected only)"
-                  value: "simple_notification"
-                - label: "Time-based Message (Morning=delivery, Evening=visitor, etc.)"
-                  value: "time_based"
-                - label: "No Notification (Silent failure)"
-                  value: "silent"
-        show_api_errors:
-          name: Show API Error Messages
-          description: Send error details to Telegram when AI fails (for debugging)
-          default: false
-          selector:
-            boolean: {}
-    filtering_section:
-      name: Smart Filtering
-      icon: mdi:filter
-      input:
-        importance_filtering:
-          name: Enable Importance Filtering
-          description: Use AI to filter out unimportant events
-          default: false
-          selector:
-            boolean: {}
+            text:
+              multiline: false
         show_filtered_events:
-          name: Show Filtered Events
-          description: Send a brief message when events are filtered out
+          name: Show Filtered (Passive) Events
+          description: Whether to send notification for passive importance.
           default: false
           selector:
             boolean: {}
+    experimental_section:
+      name: Experimental Settings
+      icon: mdi:brain
+      collapsed: true
+      input:
+        additional_actions:
+          name: Additional Actions
+          description: Additional actions to run after main actions.
+          default: []
+          selector:
+            action: {}
 
 variables:
-  camera_entities: !input camera_entities
-  motion_sensors: !input motion_sensors
+  telegram_config_entry_id: !input telegram_config_entry_id
   telegram_target: !input telegram_target
-  trigger_state: !input trigger_state
-  cooldown: !input cooldown
-  delay_notification: !input delay_notification
-  importance_filtering: !input importance_filtering
-  show_filtered_events: !input show_filtered_events
-  use_memory: !input use_memory
-  store_timeline: !input store_timeline
-  notification_time: !input notification_time
-  enable_fallback: !input enable_fallback
-  fallback_mode: !input fallback_mode
-  show_api_errors: !input show_api_errors
-  ai_prompt: !input ai_prompt
-  media_type: !input media_type
-  wait_for_frigate: !input wait_for_frigate
-  frigate_base_url: !input frigate_base_url
-  use_object_filter: !input use_object_filter
-  required_objects: !input required_objects
-  blocked_objects: !input blocked_objects
-  
-  is_manual_trigger: "{{ trigger is not defined }}"
-  
-  # Camera entity detection (matches reference blueprint)
+  camera_entities_list: !input camera_entities
+  motion_sensors_list: !input motion_sensors
   camera_entity: >
-    {% if motion_sensors and not trigger.entity_id.startswith("camera") %}
-      {% set index = motion_sensors.index(trigger.entity_id) %}
-      {{ camera_entities[index] }}
+    {% if motion_sensors_list and not trigger.entity_id.startswith('camera.') and
+          trigger.entity_id in motion_sensors_list %}
+      {% set idx = motion_sensors_list.index(trigger.entity_id) %}
+      {{ camera_entities_list[idx] if idx < (camera_entities_list|length) else trigger.entity_id }}
     {% else %}
       {{ trigger.entity_id }}
     {% endif %}
-  
-  # Time formatting
-  time_suffix: >
-    {% if notification_time == "12hour" %}
-      {{ " at " + now().strftime("%-I:%M %p") }}
-    {% elif notification_time == "24hour" %}
-      {{ " at " + now().strftime("%H:%M") }}
+  camera_entity_snapshot: >
+    {{ camera_entities_list[0] if camera_entities_list|length > 0 else 'none' }}
+  camera_file_path: >
+    {% if camera_entity_snapshot != 'none' %}
+      {{ camera_entity_snapshot.replace('camera.', '') }}
     {% else %}
-      {{ "" }}
+      'unknown_camera'
     {% endif %}
-  
-  camera_name: '{{ camera_entity.replace("camera.", "").replace("_", " ").title() }}'
-  frigate_camera_name: '{{ camera_entity.replace("camera.", "") }}'
-  snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_snapshot.jpg'
-  
-  # Event ID detection (improved logic)
-  event_id: >
-    {% if trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined %}
-      {{ trigger.payload_json.after.id }}
-    {% else %}
-      {{ now().strftime('%Y%m%d_%H%M%S') }}_manual
-    {% endif %}
-  
-  # Object filtering logic (matches reference blueprint pattern)
-  required_objects_list: "{{ required_objects.split(',') | map('trim') | list if required_objects else [] }}"
-  blocked_objects_list: "{{ blocked_objects.split(',') | map('trim') | list if blocked_objects else [] }}"
-  
-  # Determine if this is a real Frigate event
-  has_real_frigate_event: >
-    {{ trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined }}
-  
-  # Get detected objects from trigger (if available)
-  detected_objects: >
-    {% if trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined %}
-      {{ trigger.payload_json.after.data.objects | default([]) }}
-    {% else %}
-      []
-    {% endif %}
-  
-  # Object filter check
-  object_filter_passed: >
-    {% if not use_object_filter %}
-      {{ true }}
-    {% else %}
-      {% set objects = detected_objects %}
-      {% if required_objects_list and objects %}
-        {% set required_found = objects | select('in', required_objects_list) | list | length > 0 %}
-      {% else %}
-        {% set required_found = true %}
-      {% endif %}
-      {% if blocked_objects_list and objects %}
-        {% set only_blocked = objects | reject('in', blocked_objects_list) | list | length == 0 %}
-      {% else %}
-        {% set only_blocked = false %}
-      {% endif %}
-      {{ required_found and not only_blocked }}
-    {% endif %}
-  
-  # Frigate media URLs
-  frigate_clip_url: "{{ frigate_base_url }}/api/events/{{ event_id }}/clip.mp4"
-  frigate_gif_url: "{{ frigate_base_url }}/api/events/{{ event_id }}/preview.gif"
-  
-  # Local file paths for downloaded media
-  clip_path: '/config/www/snapshots/{{ frigate_camera_name }}_{{ event_id }}.mp4'
-  gif_path: '/config/www/snapshots/{{ frigate_camera_name }}_{{ event_id }}.gif'
-  
-  # Fallback message based on time of day
-  time_based_message: >
-    {% set hour = now().hour %}
-    {% if hour >= 6 and hour < 12 %}
-      Morning delivery or service visit detected
-    {% elif hour >= 12 and hour < 17 %}
-      Daytime visitor or delivery detected
-    {% elif hour >= 17 and hour < 22 %}
-      Evening visitor detected
-    {% else %}
-      Late night motion detected
-    {% endif %}
-  
-  # Importance prompt (matches reference blueprint style)
-  importance_prompt: >
-    Classify the security event based on this image. Choose from the following options: "passive" for unimportant events, "time-sensitive" for notable but non-critical events such as a person at the front door, and "critical" only for potential burglaries or highly suspicious activity. Respond with one of these options exactly, without additional explanation.
+  file_path: !input file_path
+
+trigger:
+  - platform: state
+    entity_id: !input camera_entities
+    to: !input trigger_state
+  - platform: state
+    entity_id: !input motion_sensors
+    to: 'on'
+
+condition:
+  - condition: and
+    conditions: !input run_conditions
+
+action:
+  - alias: Send initial timestamp notification
+    service: telegram_bot.send_message
+    data:
+      config_entry_id: "{{ telegram_config_entry_id }}"
+      target: >-
+        {{
+          (telegram_target | from_json if telegram_target.startswith('[')
+            else [telegram_target | int])
+        }}
+      message: "Event detected at {{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      parse_mode: html
+
+  - alias: AI analysis
+    action: llmvision.stream_analyzer
+    data:
+      image_entity: '{{ [camera_entity] }}'
+      duration: !input duration
+      provider: !input provider
+      model: !input model
+      message: !input message
+      max_tokens: !input max_tokens
+      use_memory: !input use_memory
+      remember: !input remember
+      important: !input important
+      expose_images: true
+      generate_title: true
+      include_filename: true
+      max_frames: !input max_frames
+      target_width: 1280
+    response_variable: response
+
+  - delay:
+      seconds: !input delay_notification
+
+  - alias: Check importance and send notification
+    choose:
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ (importance_filtering | default(false)) and (importance.response_text | default('') | lower) == 'passive' }}
+        sequence:
+          - if:
+              - condition: template
+                value_template: '{{ show_filtered_events }}'
+            then:
+              - service: telegram_bot.send_message
+                data:
+                  target: "{{ telegram_target }}"
+                  message: "🔇 {{ camera | default('Unknown Camera') }} - Filtered (passive) - no alert sent"
+            - stop: 'Event is not important'
+
+  - alias: Send AI analysis result
+    if:
+      - condition: template
+        value_template: "{{ telegram_config_entry_id != '' and telegram_target != '' }}"
+    then:
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >
+                  {{ response.key_frame is defined and response.key_frame and
+                     (response.key_frame.startswith('http://') or response.key_frame.startswith('https://')) }}
+            sequence:
+              - service: telegram_bot.send_photo
+                data:
+                  config_entry_id: "{{ telegram_config_entry_id }}"
+                  target: >-
+                    {{
+                      (telegram_target | from_json if telegram_target.startswith('[')
+                         else [telegram_target | int])
+                    }}
+                  url: "{{ response.key_frame }}"
+                  caption: "{{ response.title }}\n\n{{ response.response_text }}"
+                  parse_mode: html
+          - conditions:
+              - condition: template
+                value_template: >
+                  {{ response.key_frame is defined and response.key_frame and response.key_frame.startswith('/') }}
+            sequence:
+              - service: telegram_bot.send_photo
+                data:
+                  config_entry_id: "{{ telegram_config_entry_id }}"
+                  target: >-
+                    {{
+                      (telegram_target | from_json if telegram_target.startswith('[')
+                         else [telegram_target | int])
+                    }}
+                  file: "{{ response.key_frame }}"
+                  caption: "{{ response.title }}\n\n{{ response.response_text }}"
+                  parse_mode: html
+          - conditions: []
+            sequence:
+              - service: telegram_bot.send_message
+                data:
+                  config_entry_id: "{{ telegram_config_entry_id }}"
+                  target: >-
+                    {{
+                      (telegram_target | from_json if telegram_target.startswith('[')
+                         else [telegram_target | int])
+                    }}
+                  message: "{{ response.title }}\n\n{{ response.response_text }}"
+                  parse_mode: html
+
+  - choose: []
+    default: !input additional_actions
 
 max_exceeded: silent
 mode: single
-
-trigger:
-- platform: state
-  entity_id: !input camera_entities
-  to: !input trigger_state
-  id: camera_trigger
-- platform: state  
-  entity_id: !input motion_sensors
-  to: "on"
-  id: motion_trigger
-
-action:
-# Manual trigger notification
-- if:
-  - condition: template
-    value_template: "{{ is_manual_trigger }}"
-  then:
-  - service: telegram_bot.send_message
-    data:
-      target: !input telegram_target
-      message: "🔧 Manual trigger for {{ camera_name }}{{ time_suffix }}"
-
-# Object filtering check (matches reference blueprint logic)
-- choose:
-  - conditions:
-    - condition: template
-      value_template: "{{ use_object_filter and not object_filter_passed }}"
-    sequence:
-    - if:
-      - condition: template
-        value_template: "{{ show_filtered_events }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "🔇 {{ camera_name }}{{ time_suffix }} - Object filter blocked: {{ detected_objects | join(', ') }}"
-    - stop: "Objects do not match filter criteria"
-
-# Importance filtering (matches reference blueprint flow)
-- choose:
-  - conditions:
-    - condition: template
-      value_template: "{{ importance_filtering }}"
-    sequence:
-    - service: llmvision.image_analyzer
-      data:
-        image_entity: ["{{ camera_entity }}"]
-        provider: !input provider
-        model: !input model
-        message: "{{ importance_prompt }}"
-        include_filename: false
-        target_width: !input target_width
-        max_tokens: 3
-      response_variable: importance
-      continue_on_error: true
-
-# Stop if event is passive (matches reference blueprint)
-- choose:
-  - conditions:
-    - condition: template
-      value_template: "{{ importance_filtering and importance.response_text|lower == 'passive' }}"
-    sequence:
-    - if:
-      - condition: template
-        value_template: "{{ show_filtered_events }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "🔇 {{ camera_name }}{{ time_suffix }} - Filtered (passive) - no alert sent"
-    - stop: "Event is not important"
-
-# Notification cooldown check (matches reference blueprint exactly)
-- if:
-  - condition: template
-    value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).total_seconds() > delay_notification.total_seconds() }}"
-  then:
-  
-  # Wait for Frigate processing if needed
-  - if:
-    - condition: template
-      value_template: "{{ media_type in ['clip', 'gif'] and has_real_frigate_event }}"
-    then:
-    - delay: !input wait_for_frigate
-  
-  # Send media based on type selection
-  - choose:
-    # Static snapshot
-    - conditions:
-      - condition: template
-        value_template: "{{ media_type == 'snapshot' or not has_real_frigate_event }}"
-      sequence:
-      - service: camera.snapshot
-        target:
-          entity_id: "{{ camera_entity }}"
-        data:
-          filename: "{{ snapshot_path }}"
-      
-      - service: telegram_bot.send_photo
-        data:
-          target: !input telegram_target
-          file: "{{ snapshot_path }}"
-          caption: "{{ camera_name }}{{ time_suffix }} - analyzing..."
-    
-    # Frigate Clip (MP4)
-    - conditions:
-      - condition: template
-        value_template: "{{ media_type == 'clip' and has_real_frigate_event }}"
-      sequence:
-      - service: downloader.download_file
-        data:
-          url: "{{ frigate_clip_url }}"
-          filename: "{{ clip_path }}"
-        continue_on_error: true
-      
-      - delay:
-          seconds: 1
-      
-      - choose:
-        - conditions:
-          - condition: template
-            value_template: "{{ states('sensor.file_exists') == 'on' }}"
-          sequence:
-          - service: telegram_bot.send_video
-            data:
-              target: !input telegram_target
-              file: "{{ clip_path }}"
-              caption: "{{ camera_name }}{{ time_suffix }} - analyzing..."
-        default:
-        - service: camera.snapshot
-          target:
-            entity_id: "{{ camera_entity }}"
-          data:
-            filename: "{{ snapshot_path }}"
-        - service: telegram_bot.send_photo
-          data:
-            target: !input telegram_target
-            file: "{{ snapshot_path }}"
-            caption: "{{ camera_name }}{{ time_suffix }} - analyzing... (clip unavailable)"
-    
-    # Frigate GIF
-    - conditions:
-      - condition: template
-        value_template: "{{ media_type == 'gif' and has_real_frigate_event }}"
-      sequence:
-      - service: downloader.download_file
-        data:
-          url: "{{ frigate_gif_url }}"
-          filename: "{{ gif_path }}"
-        continue_on_error: true
