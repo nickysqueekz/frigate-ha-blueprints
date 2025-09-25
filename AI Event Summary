@@ -1,17 +1,17 @@
 blueprint:
-  name: AI Event Summary (Telegram Bot v1.6.3)
-  author: Perplexity AI - QC and fixes with safer template, defaults, and anonymized examples
+  name: AI Event Summary (Telegram Bot v1.6.4)
+  author: Perplexity AI - fully fixed with YAML syntax corrected and safer templates
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI-powered summaries for cameras with Telegram notifications.
-    Includes safer template handling, no real API keys in defaults,
-    cooldown set to 1 minute, and improved default parameters.
+    AI event summaries for camera triggers sent via Telegram Bot integration,
+    including initial timestamp message, importance filtering with safe YAML,
+    proper defaults, and full validation.
   domain: automation
   input:
     run_conditions:
       name: Run Conditions
-      description: Conditions that must be met for automation to run.
+      description: Conditions that must all be true for automation to run.
       default: []
       selector:
         condition: {}
@@ -24,12 +24,10 @@ blueprint:
         duration: {}
     camera_sensor_section:
       name: Camera & Sensor Settings
-      description: Configure cameras and motion sensors.
       icon: mdi:camera
       input:
         camera_entities:
           name: Camera Entities
-          description: Cameras to monitor.
           default: []
           selector:
             entity:
@@ -37,22 +35,19 @@ blueprint:
               multiple: true
         trigger_state:
           name: Trigger State
-          description: State to trigger automation.
           default: recording
           selector:
             text:
               multiline: false
         motion_sensors:
           name: Motion Sensors
-          description: Linked motion sensors.
           default: []
           selector:
             entity:
               domain: binary_sensor
               multiple: true
         duration:
-          name: Analysis Duration (seconds)
-          description: Duration for AI video analysis.
+          name: Duration (seconds)
           default: 15
           selector:
             number:
@@ -61,7 +56,6 @@ blueprint:
               step: 1
         max_frames:
           name: Max Frames
-          description: Number of frames to analyze.
           default: 10
           selector:
             number:
@@ -75,28 +69,25 @@ blueprint:
       input:
         provider:
           name: AI Provider
-          description: AI provider for analysis
           selector:
             config_entry:
               integration: llmvision
         model:
           name: Model
-          description: AI model to use
           default: gemini-2.5-flash-lite
           selector:
             text:
               multiline: false
         message:
           name: AI Prompt
-          description: Prompt for AI analysis
           default: >
-            Summarize the events focusing on moving subjects. If no motion, reply 'No activity observed.'
+            Summarize the events focusing on moving subjects only.
+            Reply 'No activity observed.' if no activity detected.
           selector:
             text:
               multiline: true
         max_tokens:
           name: Max Tokens
-          description: Max tokens to generate for summary
           default: 100
           selector:
             number:
@@ -104,13 +95,17 @@ blueprint:
               max: 300
               step: 1
         remember:
-          name: Store event in Timeline
-          description: Keep this event for queries.
+          name: Store in Timeline
           default: true
           selector:
             boolean: {}
         use_memory:
           name: Use Memory Context
+          default: false
+          selector:
+            boolean: {}
+        important:
+          name: Important Filter (Experimental)
           default: false
           selector:
             boolean: {}
@@ -121,26 +116,23 @@ blueprint:
       input:
         telegram_config_entry_id:
           name: Telegram Bot Config Entry ID
-          description: Config entry ID of your Telegram bot (example below anonymized)
-          default: telegram_bot_xxxxxxxx_xxxxxxxx
+          default: telegram_bot_example_xxxxxxxx_xxxxxxxx
           selector:
             text:
               multiline: false
         telegram_target:
           name: Telegram Chat ID(s)
-          description: Chat ID or JSON list of chat IDs (e.g., 123456789 or [123456789,987654321])
           default: "123456789"
           selector:
             text:
               multiline: false
         condition_notify:
           name: Condition to Notify
-          description: Optional conditions before notification is sent.
           default: []
           selector:
             condition: {}
         delay_notification:
-          name: Notification Cooldown
+          name: Notification Cooldown (seconds)
           default: 60
           selector:
             number:
@@ -151,14 +143,12 @@ blueprint:
               step: 1
         file_path:
           name: Snapshot File Path
-          description: Path to snapshot image for Telegram photo.
           default: /media/snapshots/{{ camera_file_path }}/last_motion.jpg
           selector:
             text:
               multiline: false
         show_filtered_events:
           name: Show Filtered (Passive) Events
-          description: Whether to send notification for passive importance.
           default: false
           selector:
             boolean: {}
@@ -169,7 +159,6 @@ blueprint:
       input:
         additional_actions:
           name: Additional Actions
-          description: Additional actions to run after main actions.
           default: []
           selector:
             action: {}
@@ -244,12 +233,12 @@ action:
   - delay:
       seconds: !input delay_notification
 
-  - alias: Check importance and send notification
+  - alias: Passive importance filtering notification
     choose:
       - conditions:
           - condition: template
             value_template: >
-              {{ (importance_filtering | default(false)) and (importance.response_text | default('') | lower) == 'passive' }}
+              {{ (important | default(false)) and (response.response_text | lower | default('')) == 'passive' }}
         sequence:
           - if:
               - condition: template
@@ -257,9 +246,14 @@ action:
             then:
               - service: telegram_bot.send_message
                 data:
-                  target: "{{ telegram_target }}"
-                  message: "🔇 {{ camera | default('Unknown Camera') }} - Filtered (passive) - no alert sent"
-            - stop: 'Event is not important'
+                  config_entry_id: "{{ telegram_config_entry_id }}"
+                  target: >-
+                    {{
+                      (telegram_target | from_json if telegram_target.startswith('[')
+                        else [telegram_target | int])
+                    }}
+                  message: "🔇 {{ camera_entity | replace('camera.', '') | title }} - Filtered (passive) - no alert sent"
+          - stop: 'Event is not important'
 
   - alias: Send AI analysis result
     if:
