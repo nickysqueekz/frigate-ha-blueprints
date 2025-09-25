@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5.6.1)
+  name: AI Event Summary with Telegram (Enhanced v1.5.7)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -29,6 +29,15 @@ blueprint:
                   value: "12hour"
                 - label: "24 Hour Format (15:45)"
                   value: "24hour"
+        delay_notification:
+          name: Notification Cooldown (Seconds)
+          description: Time to wait before sending another notification (separate from automation cooldown)
+          default: 60
+          selector:
+            number:
+              min: 0
+              max: 3600
+              step: 1
     camera_section:
       name: Camera Settings
       icon: mdi:camera
@@ -55,20 +64,14 @@ blueprint:
           selector:
             text: {}
         cooldown_minutes:
-          name: Cooldown (Minutes)
-          description: Wait time before allowing another notification for the same camera
+          name: Automation Cooldown (Minutes)
+          description: Time to wait before running automation again after completion
           default: 5
           selector:
             number:
               min: 0
               max: 60
               step: 1
-        show_cooldown_messages:
-          name: Show Cooldown Messages
-          description: Send a message when events are skipped due to cooldown (for debugging)
-          default: true
-          selector:
-            boolean: {}
     ai_section:
       name: AI Analysis Settings
       icon: mdi:brain
@@ -176,22 +179,9 @@ blueprint:
         importance_filtering:
           name: Enable Importance Filtering
           description: Use AI to filter out unimportant events
-          default: true
+          default: false
           selector:
             boolean: {}
-        minimum_importance:
-          name: Minimum Importance Level
-          description: Only send notifications for events at or above this level
-          default: "time-sensitive"
-          selector:
-            select:
-              options:
-                - label: "All Events (No Filtering)"
-                  value: "passive"
-                - label: "Time-Sensitive and Critical Only"
-                  value: "time-sensitive"
-                - label: "Critical Events Only"
-                  value: "critical"
         show_filtered_events:
           name: Show Filtered Events
           description: Send a brief message when events are filtered out
@@ -205,9 +195,8 @@ variables:
   telegram_target: !input telegram_target
   trigger_state: !input trigger_state
   cooldown_minutes: !input cooldown_minutes
-  show_cooldown_messages: !input show_cooldown_messages
+  delay_notification: !input delay_notification
   importance_filtering: !input importance_filtering
-  minimum_importance: !input minimum_importance
   show_filtered_events: !input show_filtered_events
   use_memory: !input use_memory
   store_timeline: !input store_timeline
@@ -219,77 +208,47 @@ variables:
   
   is_manual_trigger: "{{ trigger is not defined }}"
   
-  # Time formatting
-  time_prefix: >
+  # FIXED: Simplified camera entity detection (matches reference blueprint logic)
+  camera_entity: >
+    {% if motion_sensors and not trigger.entity_id.startswith("camera") %}
+      {% set index = motion_sensors.index(trigger.entity_id) %}
+      {{ camera_entities[index] }}
+    {% else %}
+      {{ trigger.entity_id }}
+    {% endif %}
+  
+  # Time formatting with proper template
+  time_suffix: >
     {% if notification_time == "12hour" %}
-      {{ now().strftime("%-I:%M %p") + " " }}
+      {{ " at " + now().strftime("%-I:%M %p") }}
     {% elif notification_time == "24hour" %}
-      {{ now().strftime("%H:%M") + " " }}
+      {{ " at " + now().strftime("%H:%M") }}
     {% else %}
       {{ "" }}
     {% endif %}
   
-  # Determine which camera triggered the event
-  triggered_camera: >
-    {% if is_manual_trigger %}
-      {{ camera_entities[0] }}
-    {% elif trigger.entity_id.startswith('camera.') %}
-      {{ trigger.entity_id }}
-    {% elif motion_sensors and trigger.entity_id in motion_sensors %}
-      {% set sensor_index = motion_sensors.index(trigger.entity_id) %}
-      {{ camera_entities[sensor_index] if sensor_index < camera_entities|length else camera_entities[0] }}
-    {% else %}
-      {{ camera_entities[0] }}
-    {% endif %}
+  camera_name: '{{ camera_entity.replace("camera.", "").replace("_", " ").title() }}'
+  snapshot_path: '/config/www/snapshots/{{ camera_entity.replace("camera.", "") }}_snapshot.jpg'
   
-  camera_name: '{{ triggered_camera.replace("camera.", "").replace("_", " ").title() }}'
-  snapshot_path: '/config/www/snapshots/{{ triggered_camera.replace("camera.", "") }}_snapshot.jpg'
-  
-  # FIXED cooldown logic
+  # Cooldown duration in seconds for the delay at the end
   cooldown_seconds: "{{ cooldown_minutes * 60 }}"
-  automation_last_triggered: "{{ this.attributes.last_triggered }}"
-  
-  # Only check cooldown if we have a previous trigger time and it's not a manual trigger
-  cooldown_active: >
-    {% if is_manual_trigger or cooldown_minutes == 0 %}
-      {{ false }}
-    {% elif automation_last_triggered is none %}
-      {{ false }}
-    {% else %}
-      {{ (as_timestamp(now()) - as_timestamp(automation_last_triggered)) < cooldown_seconds }}
-    {% endif %}
-  
-  # Calculate seconds since last trigger for debug messages
-  seconds_since_last: >
-    {% if automation_last_triggered is none %}
-      999999
-    {% else %}
-      {{ (as_timestamp(now()) - as_timestamp(automation_last_triggered)) | int }}
-    {% endif %}
   
   # Fallback message based on time of day
   time_based_message: >
     {% set hour = now().hour %}
     {% if hour >= 6 and hour < 12 %}
-      "Morning delivery or service visit detected"
+      Morning delivery or service visit detected
     {% elif hour >= 12 and hour < 17 %}
-      "Daytime visitor or delivery detected"
+      Daytime visitor or delivery detected
     {% elif hour >= 17 and hour < 22 %}
-      "Evening visitor detected"
+      Evening visitor detected
     {% else %}
-      "Late night motion detected"
+      Late night motion detected
     {% endif %}
   
-  # AI Prompts
+  # FIXED: Simplified importance prompt (matches reference style)
   importance_prompt: >
-    Analyze this security camera image and classify the event importance level.
-    
-    Respond with ONLY one of these words:
-    - "passive" for unimportant events (shadows, leaves, small animals, normal background activity)
-    - "time-sensitive" for notable events (people, vehicles, delivery persons, visitors)  
-    - "critical" for urgent situations (suspicious behavior, potential security threats, emergencies)
-    
-    Consider the context and whether a homeowner would want to be notified about this event.
+    Classify the security event based on this image. Choose from the following options: "passive" for unimportant events, "time-sensitive" for notable but non-critical events such as a person at the front door, and "critical" only for potential burglaries or highly suspicious activity. Respond with one of these options exactly, without additional explanation.
 
 max_exceeded: silent
 mode: single
@@ -313,86 +272,32 @@ action:
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }}"
+      message: "🔧 Manual trigger for {{ camera_name }}{{ time_suffix }}"
 
-# Check cooldown with better debug info (skip for manual triggers)
-- if:
-  - condition: template
-    value_template: "{{ cooldown_active }}"
-  then:
-  - if:
+# FIXED: Importance filtering BEFORE notifications (matches reference blueprint flow)
+- choose:
+  - conditions:
     - condition: template
-      value_template: "{{ show_cooldown_messages }}"
-    then:
-    - service: telegram_bot.send_message
+      value_template: "{{ importance_filtering }}"
+    sequence:
+    - service: llmvision.image_analyzer
       data:
-        target: !input telegram_target
-        message: |
-          ⏰ {{ time_prefix }}{{ camera_name }} cooldown active
-          Last triggered: {{ automation_last_triggered or 'Never' }}
-          Seconds since: {{ seconds_since_last }}
-          Cooldown period: {{ cooldown_seconds }}s
-          Manual trigger: {{ is_manual_trigger }}
-  - stop: "Cooldown active for {{ camera_name }}"
+        image_entity: ["{{ camera_entity }}"]
+        provider: !input provider
+        model: !input model
+        message: "{{ importance_prompt }}"
+        include_filename: false
+        target_width: !input target_width
+        max_tokens: 3
+      response_variable: importance
+      continue_on_error: true
 
-# Take snapshot for importance analysis
-- service: camera.snapshot
-  target:
-    entity_id: "{{ triggered_camera }}"
-  data:
-    filename: "{{ snapshot_path }}"
-
-# Importance Classification (if enabled) - WITH ERROR HANDLING
-- if:
-  - condition: template
-    value_template: "{{ importance_filtering and not is_manual_trigger }}"
-  then:
-  - service: llmvision.image_analyzer
-    data:
-      image_entity: ["{{ triggered_camera }}"]
-      provider: !input provider
-      model: !input model
-      message: "{{ importance_prompt }}"
-      include_filename: false
-      target_width: !input target_width
-      max_tokens: 5
-    response_variable: importance_result
-    continue_on_error: true
-
-  # Check if importance analysis failed
-  - if:
+# FIXED: Stop if event is passive (matches reference blueprint logic)
+- choose:
+  - conditions:
     - condition: template
-      value_template: "{{ importance_result is not defined or importance_result.response_text is not defined }}"
-    then:
-    - if:
-      - condition: template
-        value_template: "{{ show_api_errors }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "⚠️ {{ time_prefix }}{{ camera_name }} - Importance API failed, proceeding anyway"
-    # Set fallback importance for filtering logic
-    - variables:
-        importance_result: 
-          response_text: "time-sensitive"
-
-  # Check if event meets minimum importance threshold - STOP SILENTLY IF NOT
-  - if:
-    - condition: template
-      value_template: >
-        {% set detected = importance_result.response_text.lower().strip() %}
-        {% set min_level = minimum_importance %}
-        {% if min_level == "passive" %}
-          {{ false }}
-        {% elif min_level == "time-sensitive" %}
-          {{ detected not in ["time-sensitive", "critical"] }}
-        {% elif min_level == "critical" %}
-          {{ detected != "critical" }}
-        {% else %}
-          {{ false }}
-        {% endif %}
-    then:
+      value_template: "{{ importance_filtering and importance.response_text|lower == 'passive' }}"
+    sequence:
     - if:
       - condition: template
         value_template: "{{ show_filtered_events }}"
@@ -400,86 +305,108 @@ action:
       - service: telegram_bot.send_message
         data:
           target: !input telegram_target
-          message: "🔇 {{ time_prefix }}{{ camera_name }} - Filtered ({{ importance_result.response_text }}) - no alert sent"
-    - stop: "Event filtered - importance too low"
+          message: "🔇 {{ camera_name }}{{ time_suffix }} - Filtered (passive) - no alert sent"
+    - stop: "Event is not important"
 
-# Message 1: Combined timestamp + camera + image + analyzing caption
-- service: telegram_bot.send_photo
-  data:
-    target: !input telegram_target
-    file: "{{ snapshot_path }}"
-    caption: "{{ time_prefix }}{{ camera_name }} - analyzing..."
-
-# Main AI Analysis with comprehensive error handling
-- service: llmvision.stream_analyzer
-  data:
-    image_entity: ["{{ triggered_camera }}"]
-    duration: !input duration
-    provider: !input provider
-    model: !input model
-    message: "{{ ai_prompt }}"
-    max_frames: !input max_frames
-    target_width: !input target_width
-    max_tokens: !input max_tokens
-    use_memory: !input use_memory
-    remember: !input store_timeline
-    generate_title: !input store_timeline
-    expose_images: !input store_timeline
-  response_variable: analysis
-  continue_on_error: true
-
-# Handle AI analysis result or fallback
-- choose:
-  # Success - AI analysis worked
-  - conditions:
-    - condition: template
-      value_template: "{{ analysis is defined and analysis.response_text is defined and analysis.response_text != '' }}"
-    sequence:
-    - service: telegram_bot.send_message
-      data:
-        target: !input telegram_target
-        message: "{{ analysis.response_text }}"
+# FIXED: Notification cooldown check (matches reference blueprint)
+- if:
+  - condition: template
+    value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}"
+  then:
   
-  # Fallback - AI analysis failed
-  - conditions:
-    - condition: template
-      value_template: "{{ enable_fallback }}"
-    sequence:
-    - if:
+  # Take snapshot
+  - service: camera.snapshot
+    target:
+      entity_id: "{{ camera_entity }}"
+    data:
+      filename: "{{ snapshot_path }}"
+
+  # Message 1: Combined timestamp + camera + image + analyzing caption
+  - service: telegram_bot.send_photo
+    data:
+      target: !input telegram_target
+      file: "{{ snapshot_path }}"
+      caption: "{{ camera_name }}{{ time_suffix }} - analyzing..."
+
+  # Main AI Analysis with comprehensive error handling
+  - service: llmvision.stream_analyzer
+    data:
+      image_entity: ["{{ camera_entity }}"]
+      duration: !input duration
+      provider: !input provider
+      model: !input model
+      message: "{{ ai_prompt }}"
+      max_frames: !input max_frames
+      target_width: !input target_width
+      max_tokens: !input max_tokens
+      use_memory: !input use_memory
+      remember: !input store_timeline
+      generate_title: !input store_timeline
+      expose_images: !input store_timeline
+      include_filename: true
+    response_variable: analysis
+    continue_on_error: true
+
+  # Handle AI analysis result or fallback
+  - choose:
+    # Success - AI analysis worked
+    - conditions:
       - condition: template
-        value_template: "{{ show_api_errors }}"
-      then:
+        value_template: "{{ analysis is defined and analysis.response_text is defined and analysis.response_text != '' }}"
+      sequence:
       - service: telegram_bot.send_message
         data:
           target: !input telegram_target
-          message: "🚨 {{ time_prefix }}{{ camera_name }} - AI API failed (quota/service error) - using fallback"
+          message: "{{ analysis.response_text }}"
     
-    # Send fallback notification based on mode
-    - choose:
-      - conditions:
+    # Fallback - AI analysis failed
+    - conditions:
+      - condition: template
+        value_template: "{{ enable_fallback }}"
+      sequence:
+      - if:
         - condition: template
-          value_template: "{{ fallback_mode == 'simple_notification' }}"
-        sequence:
+          value_template: "{{ show_api_errors }}"
+        then:
         - service: telegram_bot.send_message
           data:
             target: !input telegram_target
-            message: "{{ camera_name }} motion detected (AI unavailable)"
+            message: "🚨 {{ camera_name }}{{ time_suffix }} - AI API failed - using fallback"
       
-      - conditions:
-        - condition: template
-          value_template: "{{ fallback_mode == 'time_based' }}"
-        sequence:
-        - service: telegram_bot.send_message
-          data:
-            target: !input telegram_target
-            message: "{{ time_based_message }} (AI unavailable)"
-      
-      # Silent mode - do nothing
-      default: []
+      # Send fallback notification based on mode
+      - choose:
+        - conditions:
+          - condition: template
+            value_template: "{{ fallback_mode == 'simple_notification' }}"
+          sequence:
+          - service: telegram_bot.send_message
+            data:
+              target: !input telegram_target
+              message: "{{ camera_name }} motion detected (AI unavailable)"
+        
+        - conditions:
+          - condition: template
+            value_template: "{{ fallback_mode == 'time_based' }}"
+          sequence:
+          - service: telegram_bot.send_message
+            data:
+              target: !input telegram_target
+              message: "{{ time_based_message }} (AI unavailable)"
+        
+        # Silent mode - do nothing
+        default: []
 
-  # No fallback enabled - send error message
-  default:
-  - service: telegram_bot.send_message
-    data:
-      target: !input telegram_target
-      message: "❌ {{ time_prefix }}{{ camera_name }} - AI analysis failed and no fallback configured"
+    # No fallback enabled - send error message
+    default:
+    - service: telegram_bot.send_message
+      data:
+        target: !input telegram_target
+        message: "❌ {{ camera_name }}{{ time_suffix }} - AI analysis failed and no fallback configured"
+
+# PROPER COOLDOWN: Delay at the end (matches reference blueprint)
+- if:
+  - condition: template
+    value_template: "{{ not is_manual_trigger and cooldown_minutes > 0 }}"
+  then:
+  - delay:
+      seconds: "{{ cooldown_seconds }}"
