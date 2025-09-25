@@ -1,372 +1,412 @@
 blueprint:
-  name: aAI Event Summary
-  author: valentinfrlch + nr + customized dual notify
+  name: AI Event Summary with Telegram (Enhanced v1.5.7)
+  author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
-  description: >
-    AI-powered summaries for security camera events. Sends a notification
-    with a preview to your phone that is updated dynamically when the AI summary is
-    available.
+  description: 'AI-powered camera event summaries with smart filtering, timeline storage, memory integration, and API fallback handling.'
   domain: automation
-  source_url: https://github.com/nickysqueekz/frigate-ha-blueprints/blob/main/AI%20Event%20Summary%201.5.3.yaml
-
   input:
-    # ... [inputs unchanged for brevity]
+    telegram_section:
+      name: Telegram Settings
+      icon: mdi:telegram
+      input:
+        telegram_target:
+          name: Telegram Chat ID
+          description: The chat ID to send notifications to
+          default: "7882720724"
+          selector:
+            text: {}
+        notification_time:
+          name: Notification Time Format
+          description: Add time to notification messages
+          default: "12hour"
+          selector:
+            select:
+              options:
+                - label: "No Time Added"
+                  value: "none"
+                - label: "12 Hour Format (3:45 PM)"
+                  value: "12hour"
+                - label: "24 Hour Format (15:45)"
+                  value: "24hour"
+        delay_notification:
+          name: Notification Cooldown (Seconds)
+          description: Time to wait before sending another notification (separate from automation cooldown)
+          default: 60
+          selector:
+            number:
+              min: 0
+              max: 3600
+              step: 1
+    camera_section:
+      name: Camera Settings
+      icon: mdi:camera
+      input:
+        camera_entities:
+          name: Camera Entities
+          description: Camera entities to monitor (can select multiple)
+          selector:
+            entity:
+              multiple: true
+              domain: camera
+        motion_sensors:
+          name: Motion Sensors (Optional)
+          description: Motion sensors for cameras (same order as cameras). Leave empty if cameras change state directly.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              domain: binary_sensor
+        trigger_state:
+          name: Camera Trigger State
+          description: State that triggers the automation for cameras
+          default: "recording"
+          selector:
+            text: {}
+        cooldown_minutes:
+          name: Automation Cooldown (Minutes)
+          description: Time to wait before running automation again after completion
+          default: 5
+          selector:
+            number:
+              min: 0
+              max: 60
+              step: 1
+    ai_section:
+      name: AI Analysis Settings
+      icon: mdi:brain
+      input:
+        provider:
+          name: LLM Provider
+          description: Provider for AI analysis
+          selector:
+            config_entry:
+              integration: llmvision
+        model:
+          name: Model
+          description: Model to use
+          default: "gpt-4o-mini"
+          selector:
+            text: {}
+        ai_prompt:
+          name: AI Analysis Prompt
+          description: Prompt sent to AI for analyzing camera footage
+          default: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise."
+          selector:
+            text:
+              multiline: true
+        duration:
+          name: Analysis Duration (Seconds)
+          description: How long to record for analysis
+          default: 5
+          selector:
+            number:
+              min: 1
+              max: 30
+              step: 1
+        max_frames:
+          name: Maximum Frames
+          description: Maximum number of frames to analyze
+          default: 3
+          selector:
+            number:
+              min: 1
+              max: 15
+              step: 1
+        target_width:
+          name: Image Width
+          description: Resize images to this width (lower = faster, less detail)
+          default: 1280
+          selector:
+            number:
+              min: 512
+              max: 1920
+              step: 64
+        max_tokens:
+          name: Max Response Length
+          description: Maximum length of AI response (higher = more detailed)
+          default: 50
+          selector:
+            number:
+              min: 10
+              max: 200
+              step: 10
+        use_memory:
+          name: Use Memory
+          description: Use information stored in memory to provide additional context (requires LLMVision memory setup)
+          default: false
+          selector:
+            boolean: {}
+        store_timeline:
+          name: Store in Timeline
+          description: Store events in Home Assistant timeline for review
+          default: true
+          selector:
+            boolean: {}
+    fallback_section:
+      name: API Fallback Settings
+      icon: mdi:backup-restore
+      input:
+        enable_fallback:
+          name: Enable API Fallback
+          description: Use fallback behavior when AI API fails (quota exceeded, service unavailable, etc.)
+          default: true
+          selector:
+            boolean: {}
+        fallback_mode:
+          name: Fallback Mode
+          description: What to do when AI analysis fails
+          default: "simple_notification"
+          selector:
+            select:
+              options:
+                - label: "Simple Notification (Motion detected only)"
+                  value: "simple_notification"
+                - label: "Time-based Message (Morning=delivery, Evening=visitor, etc.)"
+                  value: "time_based"
+                - label: "No Notification (Silent failure)"
+                  value: "silent"
+        show_api_errors:
+          name: Show API Error Messages
+          description: Send error details to Telegram when API fails (for debugging)
+          default: false
+          selector:
+            boolean: {}
+    filtering_section:
+      name: Smart Filtering
+      icon: mdi:filter
+      input:
+        importance_filtering:
+          name: Enable Importance Filtering
+          description: Use AI to filter out unimportant events
+          default: false
+          selector:
+            boolean: {}
+        show_filtered_events:
+          name: Show Filtered Events
+          description: Send a brief message when events are filtered out
+          default: false
+          selector:
+            boolean: {}
 
 variables:
-  # ... [variables unchanged for brevity]
+  camera_entities: !input camera_entities
+  motion_sensors: !input motion_sensors
+  telegram_target: !input telegram_target
+  trigger_state: !input trigger_state
+  cooldown_minutes: !input cooldown_minutes
+  delay_notification: !input delay_notification
+  importance_filtering: !input importance_filtering
+  show_filtered_events: !input show_filtered_events
+  use_memory: !input use_memory
+  store_timeline: !input store_timeline
+  notification_time: !input notification_time
+  enable_fallback: !input enable_fallback
+  fallback_mode: !input fallback_mode
+  show_api_errors: !input show_api_errors
+  ai_prompt: !input ai_prompt
+  
+  is_manual_trigger: "{{ trigger is not defined }}"
+  
+  # FIXED: Simplified camera entity detection (matches reference blueprint logic)
+  camera_entity: >
+    {% if motion_sensors and not trigger.entity_id.startswith("camera") %}
+      {% set index = motion_sensors.index(trigger.entity_id) %}
+      {{ camera_entities[index] }}
+    {% else %}
+      {{ trigger.entity_id }}
+    {% endif %}
+  
+  # Time formatting with proper template
+  time_suffix: >
+    {% if notification_time == "12hour" %}
+      {{ " at " + now().strftime("%-I:%M %p") }}
+    {% elif notification_time == "24hour" %}
+      {{ " at " + now().strftime("%H:%M") }}
+    {% else %}
+      {{ "" }}
+    {% endif %}
+  
+  camera_name: '{{ camera_entity.replace("camera.", "").replace("_", " ").title() }}'
+  snapshot_path: '/config/www/snapshots/{{ camera_entity.replace("camera.", "") }}_snapshot.jpg'
+  
+  # Cooldown duration in seconds for the delay at the end
+  cooldown_seconds: "{{ cooldown_minutes * 60 }}"
+  
+  # Fallback message based on time of day
+  time_based_message: >
+    {% set hour = now().hour %}
+    {% if hour >= 6 and hour < 12 %}
+      Morning delivery or service visit detected
+    {% elif hour >= 12 and hour < 17 %}
+      Daytime visitor or delivery detected
+    {% elif hour >= 17 and hour < 22 %}
+      Evening visitor detected
+    {% else %}
+      Late night motion detected
+    {% endif %}
+  
+  # FIXED: Simplified importance prompt (matches reference style)
+  importance_prompt: >
+    Classify the security event based on this image. Choose from the following options: "passive" for unimportant events, "time-sensitive" for notable but non-critical events such as a person at the front door, and "critical" only for potential burglaries or highly suspicious activity. Respond with one of these options exactly, without additional explanation.
 
 max_exceeded: silent
 mode: single
 
-triggers:
-  - platform: state
-    entity_id: !input camera_entities
-    to: !input trigger_state
-    id: camera_trigger
-  - platform: state
-    entity_id: !input motion_sensors
-    to: 'on'
-    id: motion_sensor_trigger
-
-condition:
-  - condition: and
-    conditions: !input run_conditions
+trigger:
+- platform: state
+  entity_id: !input camera_entities
+  to: !input trigger_state
+  id: camera_trigger
+- platform: state  
+  entity_id: !input motion_sensors
+  to: "on"
+  id: motion_trigger
 
 action:
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: '{{ important }}'
-        sequence:
-          - service: llmvision.image_analyzer
-            data:
-              image_entity: '{{ [camera_entity] }}'
-              provider: !input provider
-              model: !input model
-              message: '{{ importance_prompt }}'
-              include_filename: true
-              target_width: 1280
-              max_tokens: 3
-            response_variable: importance
+# Manual trigger notification
+- if:
+  - condition: template
+    value_template: "{{ is_manual_trigger }}"
+  then:
+  - service: telegram_bot.send_message
+    data:
+      target: !input telegram_target
+      message: "🔧 Manual trigger for {{ camera_name }}{{ time_suffix }}"
 
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: '{{ important and importance.response_text|lower == "passive" }}'
-        sequence:
-          - stop: Event is not important
+# FIXED: Importance filtering BEFORE notifications (matches reference blueprint flow)
+- choose:
+  - conditions:
+    - condition: template
+      value_template: "{{ importance_filtering }}"
+    sequence:
+    - service: llmvision.image_analyzer
+      data:
+        image_entity: ["{{ camera_entity }}"]
+        provider: !input provider
+        model: !input model
+        message: "{{ importance_prompt }}"
+        include_filename: false
+        target_width: !input target_width
+        max_tokens: 3
+      response_variable: importance
+      continue_on_error: true
 
-  - if:
+# FIXED: Stop if event is passive (matches reference blueprint logic)
+- choose:
+  - conditions:
+    - condition: template
+      value_template: "{{ importance_filtering and importance.response_text|lower == 'passive' }}"
+    sequence:
+    - if:
       - condition: template
-        value_template: !input notify
-    then:
-      - if:
-          - condition: !input condition_notify
-        then:
-          - if:
-              - condition: template
-                value_template: '{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}'
-            then:
-              - choose:
-                  - conditions:
-                      - condition: template
-                        value_template: '{{ notification_delivery == "Dynamic" }}'
-                    sequence:
-                      - choose:
-                          - conditions:
-                              - condition: template
-                                value_template: '{{ preview_mode == "Snapshot" }}'
-                            sequence:
-                              - service: camera.snapshot
-                                data:
-                                  filename: !input file_path
-                                entity_id: !input camera_entities
-                              - repeat:
-                                  for_each: '{{ device_name_map_notify_devices }}'
-                                  sequence:
-                                    - service: notify.{{ repeat.item }}
-                                      data:
-                                        title: '{{ label }} {{ notification_time }}'
-                                        message: '{{ camera_message }} has detected activity.'
-                                        data:
-                                          url: !input tap_navigate
-                                          clickAction: !input tap_navigate
-                                          tag: '{{ tag }}'
-                                          group: !input notification_channel
-                                          alert_once: true
-                                          ttl: 0
-                                          priority: high
-                                          channel: !input notification_channel
-                                          color: !input notification_color
-                                          notification_icon: !input notification_icon
-                                          sticky: !input notification_sticky
-                                          image: '{{ snapshot_access_file_path }}'
-                                          attachment:
-                                            url: '{{ snapshot_access_file_path }}'
-                                            content_type: JPEG
-                                          push:
-                                            interruption-level: '{{ importance.response_text|lower if importance is defined else "active" }}'
-                                            sound:
-                                              name: !input notification_sound
-                                              volume: !input notification_volume
-                                              critical: '{{ notification_critical }}'
-                          - conditions:
-                              - condition: template
-                                value_template: '{{ preview_mode == "Live Preview" }}'
-                            sequence:
-                              - repeat:
-                                  for_each: '{{ device_name_map_notify_devices }}'
-                                  sequence:
-                                    - service: notify.{{ repeat.item }}
-                                      data:
-                                        title: '{{ label }} {{ notification_time }}'
-                                        message: '{{ camera_message }} has detected activity.'
-                                        data:
-                                          entity_id: '{{ camera_entity }}'
-                                          url: !input tap_navigate
-                                          tag: '{{ tag }}'
-                                          group: !input notification_channel
-                                          alert_once: true
-                                          push:
-                                            interruption-level: '{{ importance.response_text|lower if importance is defined else "active" }}'
-                                            sound:
-                                              name: !input notification_sound
-                                              volume: !input notification_volume
-                                              critical: '{{ notification_critical }}'
-                                          ttl: 0
-                                          priority: high
+        value_template: "{{ show_filtered_events }}"
+      then:
+      - service: telegram_bot.send_message
+        data:
+          target: !input telegram_target
+          message: "🔇 {{ camera_name }}{{ time_suffix }} - Filtered (passive) - no alert sent"
+    - stop: "Event is not important"
 
-                      - repeat:
-                          for_each: '{{ device_name_map_notify_entities }}'
-                          sequence:
-                            - service: notify.{{ repeat.item }}
-                              data:
-                                title: '{{ label }} {{ notification_time }}'
-                                message: '{{ camera_message }} has detected activity.'
-                                data:
-                                  url: !input tap_navigate
-                                  clickAction: !input tap_navigate
-                                  tag: '{{ tag }}'
-                                  group: !input notification_channel
-                                  alert_once: true
-                                  ttl: 0
-                                  priority: high
-                                  channel: !input notification_channel
-                                  color: !input notification_color
-                                  notification_icon: !input notification_icon
-                                  sticky: !input notification_sticky
-                                  image: '{{ snapshot_access_file_path }}'
-                                  attachment:
-                                    url: '{{ snapshot_access_file_path }}'
-                                    content_type: JPEG
-                                  push:
-                                    interruption-level: '{{ importance.response_text|lower if importance is defined else "active" }}'
-                                    sound:
-                                      name: !input notification_sound
-                                      volume: !input notification_volume
-                                      critical: '{{ notification_critical }}'
+# FIXED: Notification cooldown check (matches reference blueprint)
+- if:
+  - condition: template
+    value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}"
+  then:
+  
+  # Take snapshot
+  - service: camera.snapshot
+    target:
+      entity_id: "{{ camera_entity }}"
+    data:
+      filename: "{{ snapshot_path }}"
 
-                  - conditions:
-                      - condition: template
-                        value_template: '{{ preview_mode == "Live Preview" }}'
-                    sequence:
-                      - repeat:
-                          for_each: '{{ device_name_map_notify_entities }}'
-                          sequence:
-                            - service: notify.{{ repeat.item }}
-                              data:
-                                title: '{{ label }} {{ notification_time }}'
-                                message: '{{ camera_message }} has detected activity.'
-                                data:
-                                  entity_id: '{{ camera_entity }}'
-                                  url: !input tap_navigate
-                                  tag: '{{ tag }}'
-                                  group: !input notification_channel
-                                  alert_once: true
-                                  push:
-                                    interruption-level: '{{ importance.response_text|lower if importance is defined else "active" }}'
-                                    sound:
-                                      name: !input notification_sound
-                                      volume: !input notification_volume
-                                      critical: '{{ notification_critical }}'
-                                  ttl: 0
-                                  priority: high
+  # Message 1: Combined timestamp + camera + image + analyzing caption
+  - service: telegram_bot.send_photo
+    data:
+      target: !input telegram_target
+      file: "{{ snapshot_path }}"
+      caption: "{{ camera_name }}{{ time_suffix }} - analyzing..."
 
+  # Main AI Analysis with comprehensive error handling
   - service: llmvision.stream_analyzer
     data:
-      image_entity: '{{ [camera_entity] }}'
+      image_entity: ["{{ camera_entity }}"]
       duration: !input duration
       provider: !input provider
       model: !input model
-      message: !input message
-      use_memory: !input use_memory
-      remember: !input remember
-      expose_images: '{{ preview_mode == "Snapshot" or remember }}'
-      generate_title: !input remember
-      include_filename: true
+      message: "{{ ai_prompt }}"
       max_frames: !input max_frames
       target_width: !input target_width
       max_tokens: !input max_tokens
-    response_variable: response
+      use_memory: !input use_memory
+      remember: !input store_timeline
+      generate_title: !input store_timeline
+      expose_images: !input store_timeline
+      include_filename: true
+    response_variable: analysis
+    continue_on_error: true
 
-  - variables:
-      label: '{{ response.title }}'
-
-  - if:
+  # Handle AI analysis result or fallback
+  - choose:
+    # Success - AI analysis worked
+    - conditions:
       - condition: template
-        value_template: !input notify
-    then:
-      - if:
-          - condition: !input condition_notify
-        then:
-          - if:
-              - condition: template
-                value_template: '{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}'
-            then:
-              - choose:
-                  - conditions:
-                      - condition: template
-                        value_template: '{{ analysis_mode == "Snapshot" }}'
-                    sequence:
-                      - repeat:
-                          for_each: '{{ device_name_map_notify_devices }}'
-                          sequence:
-                            - service: notify.{{ repeat.item }}
-                              data:
-                                title: '{{ label }} {{ notification_time }}'
-                                message: '{{ response.response_text }}'
-                                data:
-                                  image: '{{ response.key_frame.replace("/config/media", "/media") }}'
-                                  url: !input tap_navigate
-                                  clickAction: !input tap_navigate
-                                  tag: '{{ tag }}'
-                                  group: !input notification_channel
-                                  alert_once: true
-                                  ttl: 0
-                                  priority: high
-                                  channel: !input notification_channel
-                                  color: !input notification_color
-                                  notification_icon: !input notification_icon
-                                  sticky: !input notification_sticky
-                                  push:
-                                    interruption-level: '{{ "passive" if notification_delivery == "Dynamic" else "active" }}'
-                                    sound:
-                                      name: !input notification_sound
-                                      volume: !input notification_volume
-                                      critical: '{{ notification_critical }}'
-                                actions:
-                                  - action: URI
-                                    title: See Snapshot
-                                    uri: '{{ response.key_frame.replace("/config/media", "/media") }}'
-
-                  - conditions:
-                      - condition: template
-                        value_template: '{{ analysis_mode == "Live Preview" }}'
-                    sequence:
-                      - repeat:
-                          for_each: '{{ device_name_map_notify_devices }}'
-                          sequence:
-                            - service: notify.{{ repeat.item }}
-                              data:
-                                title: '{{ label }} {{ notification_time }}'
-                                message: '{{ response.response_text }}'
-                                data:
-                                  entity_id: '{{ camera_entity }}'
-                                  url: !input tap_navigate
-                                  tag: '{{ tag }}'
-                                  group: !input notification_channel
-                                  alert_once: true
-                                  push:
-                                    interruption-level: '{{ importance.response_text|lower if importance is defined else "active" }}'
-                                    sound:
-                                      name: !input notification_sound
-                                      volume: !input notification_volume
-                                      critical: '{{ notification_critical }}'
-                                  ttl: 0
-                                  priority: high
-
-                  - conditions:
-                      - condition: template
-                        value_template: '{{ analysis_mode == "Snapshot" }}'
-                    sequence:
-                      - repeat:
-                          for_each: '{{ device_name_map_notify_entities }}'
-                          sequence:
-                            - service: notify.{{ repeat.item }}
-                              data:
-                                title: '{{ label }} {{ notification_time }}'
-                                message: '{{ response.response_text }}'
-                                data:
-                                  image: '{{ response.key_frame.replace("/config/media", "/media") }}'
-                                  url: !input tap_navigate
-                                  clickAction: !input tap_navigate
-                                  tag: '{{ tag }}'
-                                  group: !input notification_channel
-                                  alert_once: true
-                                  ttl: 0
-                                  priority: high
-                                  channel: !input notification_channel
-                                  color: !input notification_color
-                                  notification_icon: !input notification_icon
-                                  sticky: !input notification_sticky
-                                  push:
-                                    interruption-level: '{{ "passive" if notification_delivery == "Dynamic" else "active" }}'
-                                    sound:
-                                      name: !input notification_sound
-                                      volume: !input notification_volume
-                                      critical: '{{ notification_critical }}'
-                                actions:
-                                  - action: URI
-                                    title: See Snapshot
-                                    uri: '{{ response.key_frame.replace("/config/media", "/media") }}'
-
-                  - conditions:
-                      - condition: template
-                        value_template: '{{ analysis_mode == "Live Preview" }}'
-                    sequence:
-                      - repeat:
-                          for_each: '{{ device_name_map_notify_entities }}'
-                          sequence:
-                            - service: notify.{{ repeat.item }}
-                              data:
-                                title: '{{ label }} {{ notification_time }}'
-                                message: '{{ response.response_text }}'
-                                data:
-                                  entity_id: '{{ camera_entity }}'
-                                  url: !input tap_navigate
-                                  tag: '{{ tag }}'
-                                  group: !input notification_channel
-                                  alert_once: true
-                                  push:
-                                    interruption-level: '{{ importance.response_text|lower if importance is defined else "active" }}'
-                                    sound:
-                                      name: !input notification_sound
-                                      volume: !input notification_volume
-                                      critical: '{{ notification_critical }}'
-                                  ttl: 0
-                                  priority: high
-
-  - if:
+        value_template: "{{ analysis is defined and analysis.response_text is defined and analysis.response_text != '' }}"
+      sequence:
+      - service: telegram_bot.send_message
+        data:
+          target: !input telegram_target
+          message: "{{ analysis.response_text }}"
+    
+    # Fallback - AI analysis failed
+    - conditions:
       - condition: template
-        value_template: '{{ tts_notification }}'
-    then:
+        value_template: "{{ enable_fallback }}"
+      sequence:
       - if:
-          - condition: !input condition_notify_tts
+        - condition: template
+          value_template: "{{ show_api_errors }}"
         then:
-          - repeat:
-              for_each: '{{ device_name_map_notify_devices }}'
-              sequence:
-                - service: notify.{{ repeat.item }}
-                  data:
-                    message: TTS
-                    data:
-                      ttl: 0
-                      priority: high
-                      media_stream: !input tts_volume
-                      tts_text: '{{ response.response_text }}'
+        - service: telegram_bot.send_message
+          data:
+            target: !input telegram_target
+            message: "🚨 {{ camera_name }}{{ time_suffix }} - AI API failed - using fallback"
+      
+      # Send fallback notification based on mode
+      - choose:
+        - conditions:
+          - condition: template
+            value_template: "{{ fallback_mode == 'simple_notification' }}"
+          sequence:
+          - service: telegram_bot.send_message
+            data:
+              target: !input telegram_target
+              message: "{{ camera_name }} motion detected (AI unavailable)"
+        
+        - conditions:
+          - condition: template
+            value_template: "{{ fallback_mode == 'time_based' }}"
+          sequence:
+          - service: telegram_bot.send_message
+            data:
+              target: !input telegram_target
+              message: "{{ time_based_message }} (AI unavailable)"
+        
+        # Silent mode - do nothing
+        default: []
 
-  - choose: []
-    default: !input additional_actions
+    # No fallback enabled - send error message
+    default:
+    - service: telegram_bot.send_message
+      data:
+        target: !input telegram_target
+        message: "❌ {{ camera_name }}{{ time_suffix }} - AI analysis failed and no fallback configured"
 
-  - delay: !input cooldown
+# PROPER COOLDOWN: Delay at the end (matches reference blueprint)
+- if:
+  - condition: template
+    value_template: "{{ not is_manual_trigger and cooldown_minutes > 0 }}"
+  then:
+  - delay:
+      seconds: "{{ cooldown_seconds }}"
