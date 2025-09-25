@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.6)
+  name: AI Event Summary with Telegram (Enhanced v1.6.0)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -47,14 +47,25 @@ blueprint:
               options:
                 - label: "Static Snapshot"
                   value: "snapshot"
-                - label: "Frigate Clip (MP4)"
+                - label: "Frigate Clip (MP4) - Real events only"
                   value: "clip"
-                - label: "Frigate GIF"
+                - label: "Frigate GIF - Real events only"
                   value: "gif"
+        manual_trigger_action:
+          name: Manual Trigger Action
+          description: What to do for manual triggers (no Frigate event exists)
+          default: "create_event"
+          selector:
+            select:
+              options:
+                - label: "Create Frigate Event (recommended)"
+                  value: "create_event"
+                - label: "Use Snapshot Only"
+                  value: "snapshot_only"
         wait_for_frigate:
           name: Wait for Frigate Processing
           description: Time to wait for Frigate to generate clip/GIF (seconds)
-          default: 5
+          default: 8
           selector:
             number:
               min: 1
@@ -196,7 +207,7 @@ blueprint:
                   value: "silent"
         show_api_errors:
           name: Show API Error Messages
-          description: Send error details to Telegram when AI fails (for debugging)
+          description: Send error details to Telegram when API fails (for debugging)
           default: false
           selector:
             boolean: {}
@@ -234,6 +245,7 @@ variables:
   show_api_errors: !input show_api_errors
   ai_prompt: !input ai_prompt
   media_type: !input media_type
+  manual_trigger_action: !input manual_trigger_action
   wait_for_frigate: !input wait_for_frigate
   frigate_base_url: !input frigate_base_url
   
@@ -262,8 +274,21 @@ variables:
   frigate_camera_name: '{{ camera_entity.replace("camera.", "") }}'
   snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_snapshot.jpg'
   
-  # Frigate media paths
-  event_id: "{{ trigger.payload_json.after.id if trigger.platform == 'mqtt' else now().strftime('%Y%m%d_%H%M%S') }}"
+  # FIXED: Better event ID detection
+  event_id: >
+    {% if trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined %}
+      {{ trigger.payload_json.after.id }}
+    {% elif is_manual_trigger %}
+      manual_{{ now().strftime('%Y%m%d_%H%M%S') }}
+    {% else %}
+      fallback_{{ now().strftime('%Y%m%d_%H%M%S') }}
+    {% endif %}
+  
+  # Determine if this is a real Frigate event or manual/fallback
+  has_real_frigate_event: >
+    {{ trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined }}
+  
+  # Frigate media URLs (only valid for real events)
   frigate_clip_url: "{{ frigate_base_url }}/api/events/{{ event_id }}/clip.mp4"
   frigate_gif_url: "{{ frigate_base_url }}/api/events/{{ event_id }}/preview.gif"
   
@@ -315,6 +340,23 @@ action:
       target: !input telegram_target
       message: "🔧 Manual trigger for {{ camera_name }}{{ time_suffix }}"
 
+# Handle manual triggers by creating Frigate event (if configured)
+- if:
+  - condition: template
+    value_template: "{{ is_manual_trigger and manual_trigger_action == 'create_event' and media_type in ['clip', 'gif'] }}"
+  then:
+  - service: rest_command.create_frigate_event
+    data:
+      frigate_url: "{{ frigate_base_url }}/api/events/{{ frigate_camera_name }}/manual/create"
+      payload: '{"duration": 10, "include_recording": true}'
+    continue_on_error: true
+  - delay:
+      seconds: 2
+  # Update event_id to use the latest event from this camera
+  - variables:
+      event_id: "{{ state_attr('sensor.frigate_' + frigate_camera_name + '_latest_event', 'event_id') | default('manual_' + now().strftime('%Y%m%d_%H%M%S')) }}"
+      has_real_frigate_event: true
+
 # Importance filtering BEFORE notifications
 - choose:
   - conditions:
@@ -355,20 +397,20 @@ action:
     value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}"
   then:
   
-  # Wait for Frigate to process the event (if using clip/gif)
+  # Wait for Frigate to process the event (if using clip/gif and have real event)
   - if:
     - condition: template
-      value_template: "{{ media_type in ['clip', 'gif'] }}"
+      value_template: "{{ media_type in ['clip', 'gif'] and has_real_frigate_event }}"
     then:
     - delay:
         seconds: !input wait_for_frigate
   
   # Send media based on type selection
   - choose:
-    # Static snapshot
+    # Static snapshot (always works)
     - conditions:
       - condition: template
-        value_template: "{{ media_type == 'snapshot' }}"
+        value_template: "{{ media_type == 'snapshot' or not has_real_frigate_event }}"
       sequence:
       - service: camera.snapshot
         target:
@@ -382,10 +424,10 @@ action:
           file: "{{ snapshot_path }}"
           caption: "{{ camera_name }}{{ time_suffix }} - analyzing..."
     
-    # Frigate Clip (MP4)
+    # Frigate Clip (MP4) - only for real events
     - conditions:
       - condition: template
-        value_template: "{{ media_type == 'clip' }}"
+        value_template: "{{ media_type == 'clip' and has_real_frigate_event }}"
       sequence:
       # Download Frigate clip
       - service: downloader.download_file
@@ -395,10 +437,12 @@ action:
         continue_on_error: true
       
       # Send clip or fallback to snapshot
+      - delay:
+          seconds: 1
       - choose:
         - conditions:
           - condition: template
-            value_template: "{{ states('sensor.file_size_' + frigate_camera_name + '_' + event_id) | default(0) | int > 0 }}"
+            value_template: "{{ states('sensor.file_exists_' + frigate_camera_name) == 'on' }}"
           sequence:
           - service: telegram_bot.send_video
             data:
@@ -419,10 +463,10 @@ action:
             file: "{{ snapshot_path }}"
             caption: "{{ camera_name }}{{ time_suffix }} - analyzing... (clip unavailable)"
     
-    # Frigate GIF
+    # Frigate GIF - only for real events
     - conditions:
       - condition: template
-        value_template: "{{ media_type == 'gif' }}"
+        value_template: "{{ media_type == 'gif' and has_real_frigate_event }}"
       sequence:
       # Download Frigate GIF
       - service: downloader.download_file
@@ -432,10 +476,12 @@ action:
         continue_on_error: true
       
       # Send GIF or fallback to snapshot
+      - delay:
+          seconds: 1
       - choose:
         - conditions:
           - condition: template
-            value_template: "{{ states('sensor.file_size_' + frigate_camera_name + '_' + event_id) | default(0) | int > 0 }}"
+            value_template: "{{ states('sensor.file_exists_' + frigate_camera_name) == 'on' }}"
           sequence:
           - service: telegram_bot.send_animation
             data:
