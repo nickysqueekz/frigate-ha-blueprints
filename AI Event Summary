@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.5.5)
+  name: AI Event Summary with Telegram (Enhanced v1.5.6)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -79,37 +79,19 @@ blueprint:
           selector:
             config_entry:
               integration: llmvision
-        provider_model_combo:
-          name: Provider & Model Selection
-          description: Combined provider and model selection
-          default: "gemini-2.5-flash-lite"
-          selector:
-            select:
-              options:
-                # Google Gemini Models
-                - label: "Gemini 2.5 Flash (Fast, affordable)"
-                  value: "gemini-2.5-flash"
-                - label: "Gemini 2.5 Flash Lite (Ultra-fast, basic)"
-                  value: "gemini-2.5-flash-lite"
-                - label: "Gemini 2.5 Pro (Most capable)"
-                  value: "gemini-2.5-pro"
-                # OpenAI Models
-                - label: "GPT-4o (Intelligent, flexible)"
-                  value: "gpt-4o"
-                - label: "GPT-4o Mini (Fast, affordable)"
-                  value: "gpt-4o-mini"
-                # Claude Models
-                - label: "Claude 3.5 Sonnet (High reasoning)"
-                  value: "claude-3-5-sonnet-20241022"
-                # Custom entry
-                - label: "Custom (enter manually below)"
-                  value: "custom"
         model:
-          name: Model (Manual Entry)
-          description: Used if 'Custom' selected above, or leave blank to use dropdown selection
-          default: ""
+          name: Model
+          description: Model to use
+          default: "gpt-4o-mini"
           selector:
             text: {}
+        ai_prompt:
+          name: AI Analysis Prompt
+          description: Prompt sent to AI for analyzing camera footage
+          default: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise."
+          selector:
+            text:
+              multiline: true
         duration:
           name: Analysis Duration (Seconds)
           description: How long to record for analysis
@@ -233,20 +215,9 @@ variables:
   enable_fallback: !input enable_fallback
   fallback_mode: !input fallback_mode
   show_api_errors: !input show_api_errors
-  provider_model_combo: !input provider_model_combo
-  manual_model: !input model
+  ai_prompt: !input ai_prompt
   
   is_manual_trigger: "{{ trigger is not defined }}"
-  
-  # Determine final model to use - prioritize manual entry, then dropdown
-  final_model: >
-    {% if manual_model != "" %}
-      {{ manual_model }}
-    {% elif provider_model_combo == "custom" %}
-      gpt-4o-mini
-    {% else %}
-      {{ provider_model_combo }}
-    {% endif %}
   
   # Time formatting
   time_prefix: >
@@ -326,7 +297,7 @@ action:
   - service: telegram_bot.send_message
     data:
       target: !input telegram_target
-      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }} ({{ final_model }})"
+      message: "🔧 {{ time_prefix }}Manual trigger for {{ camera_name }}"
 
 # Check cooldown (skip for manual triggers) - SILENT by default
 - if:
@@ -359,7 +330,7 @@ action:
     data:
       image_entity: ["{{ triggered_camera }}"]
       provider: !input provider
-      model: "{{ final_model }}"
+      model: !input model
       message: "{{ importance_prompt }}"
       include_filename: false
       target_width: !input target_width
@@ -424,8 +395,8 @@ action:
     image_entity: ["{{ triggered_camera }}"]
     duration: !input duration
     provider: !input provider
-    model: "{{ final_model }}"
-    message: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise."
+    model: !input model
+    message: "{{ ai_prompt }}"
     max_frames: !input max_frames
     target_width: !input target_width
     max_tokens: !input max_tokens
