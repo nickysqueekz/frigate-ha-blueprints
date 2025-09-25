@@ -344,4 +344,150 @@ action:
   - stop: "Cooldown active for {{ camera_name }}"
 
 # Take snapshot for importance analysis
-- service: camera.
+- service: camera.snapshot
+  target:
+    entity_id: "{{ triggered_camera }}"
+  data:
+    filename: "{{ snapshot_path }}"
+
+# Importance Classification (if enabled) - WITH ERROR HANDLING
+- if:
+  - condition: template
+    value_template: "{{ importance_filtering and not is_manual_trigger }}"
+  then:
+  - service: llmvision.image_analyzer
+    data:
+      image_entity: ["{{ triggered_camera }}"]
+      provider: !input provider
+      model: "{{ final_model }}"
+      message: "{{ importance_prompt }}"
+      include_filename: false
+      target_width: !input target_width
+      max_tokens: 5
+    response_variable: importance_result
+    continue_on_error: true
+
+  # Check if importance analysis failed
+  - if:
+    - condition: template
+      value_template: "{{ importance_result is not defined or importance_result.response_text is not defined }}"
+    then:
+    - if:
+      - condition: template
+        value_template: "{{ show_api_errors }}"
+      then:
+      - service: telegram_bot.send_message
+        data:
+          target: !input telegram_target
+          message: "⚠️ {{ time_prefix }}{{ camera_name }} - Importance API failed, proceeding anyway"
+    # Set fallback importance for filtering logic
+    - variables:
+        importance_result: 
+          response_text: "time-sensitive"
+
+  # Check if event meets minimum importance threshold - STOP SILENTLY IF NOT
+  - if:
+    - condition: template
+      value_template: >
+        {% set detected = importance_result.response_text.lower().strip() %}
+        {% set min_level = minimum_importance %}
+        {% if min_level == "passive" %}
+          {{ false }}
+        {% elif min_level == "time-sensitive" %}
+          {{ detected not in ["time-sensitive", "critical"] }}
+        {% elif min_level == "critical" %}
+          {{ detected != "critical" }}
+        {% else %}
+          {{ false }}
+        {% endif %}
+    then:
+    - if:
+      - condition: template
+        value_template: "{{ show_filtered_events }}"
+      then:
+      - service: telegram_bot.send_message
+        data:
+          target: !input telegram_target
+          message: "🔇 {{ time_prefix }}{{ camera_name }} - Filtered ({{ importance_result.response_text }}) - no alert sent"
+    - stop: "Event filtered - importance too low"
+
+# Message 1: Combined timestamp + camera + image + analyzing caption
+- service: telegram_bot.send_photo
+  data:
+    target: !input telegram_target
+    file: "{{ snapshot_path }}"
+    caption: "{{ time_prefix }}{{ camera_name }} - analyzing..."
+
+# Main AI Analysis with comprehensive error handling
+- service: llmvision.stream_analyzer
+  data:
+    image_entity: ["{{ triggered_camera }}"]
+    duration: !input duration
+    provider: !input provider
+    model: "{{ final_model }}"
+    message: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise."
+    max_frames: !input max_frames
+    target_width: !input target_width
+    max_tokens: !input max_tokens
+    use_memory: !input use_memory
+    remember: !input store_timeline
+    generate_title: !input store_timeline
+    expose_images: !input store_timeline
+  response_variable: analysis
+  continue_on_error: true
+
+# Handle AI analysis result or fallback
+- choose:
+  # Success - AI analysis worked
+  - conditions:
+    - condition: template
+      value_template: "{{ analysis is defined and analysis.response_text is defined and analysis.response_text != '' }}"
+    sequence:
+    - service: telegram_bot.send_message
+      data:
+        target: !input telegram_target
+        message: "{{ analysis.response_text }}"
+  
+  # Fallback - AI analysis failed
+  - conditions:
+    - condition: template
+      value_template: "{{ enable_fallback }}"
+    sequence:
+    - if:
+      - condition: template
+        value_template: "{{ show_api_errors }}"
+      then:
+      - service: telegram_bot.send_message
+        data:
+          target: !input telegram_target
+          message: "🚨 {{ time_prefix }}{{ camera_name }} - AI API failed (quota/service error) - using fallback"
+    
+    # Send fallback notification based on mode
+    - choose:
+      - conditions:
+        - condition: template
+          value_template: "{{ fallback_mode == 'simple_notification' }}"
+        sequence:
+        - service: telegram_bot.send_message
+          data:
+            target: !input telegram_target
+            message: "{{ camera_name }} motion detected (AI unavailable)"
+      
+      - conditions:
+        - condition: template
+          value_template: "{{ fallback_mode == 'time_based' }}"
+        sequence:
+        - service: telegram_bot.send_message
+          data:
+            target: !input telegram_target
+            message: "{{ time_based_message }} (AI unavailable)"
+      
+      # Silent mode - do nothing
+      default: []
+
+  # No fallback enabled - send error message
+  default:
+  - service: telegram_bot.send_message
+    data:
+      target: !input telegram_target
+      message: "❌ {{ time_prefix }}{{ camera_name }} - AI analysis failed and no fallback configured"
