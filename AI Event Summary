@@ -1,5 +1,5 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.6.2)
+  name: AI Event Summary with Telegram (Enhanced v1.6.2.1)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
@@ -29,12 +29,14 @@ blueprint:
                 - label: "24 Hour Format (15:45)"
                   value: "24hour"
         delay_notification:
-          name: Notification Cooldown
+          name: Notification Cooldown (Seconds)
           description: Time to wait before sending another notification (separate from automation cooldown)
-          default:
-            seconds: 60
+          default: 60
           selector:
-            duration: {}
+            number:
+              min: 0
+              max: 3600
+              step: 1
         media_type:
           name: Media Type
           description: Type of media to send with notifications
@@ -49,12 +51,14 @@ blueprint:
                 - label: "Frigate GIF - Real events only"
                   value: "gif"
         wait_for_frigate:
-          name: Wait for Frigate Processing
+          name: Wait for Frigate Processing (Seconds)
           description: Time to wait for Frigate to generate clip/GIF
-          default:
-            seconds: 8
+          default: 8
           selector:
-            duration: {}
+            number:
+              min: 1
+              max: 30
+              step: 1
     camera_section:
       name: Camera Settings
       icon: mdi:camera
@@ -80,13 +84,15 @@ blueprint:
           default: "recording"
           selector:
             text: {}
-        cooldown:
-          name: Automation Cooldown
+        cooldown_minutes:
+          name: Automation Cooldown (Minutes)
           description: Time to wait before running automation again after completion
-          default:
-            minutes: 5
+          default: 5
           selector:
-            duration: {}
+            number:
+              min: 0
+              max: 60
+              step: 1
         frigate_base_url:
           name: Frigate Base URL
           description: Base URL for Frigate (e.g., http://frigate.local:5000)
@@ -117,12 +123,14 @@ blueprint:
             text:
               multiline: true
         duration:
-          name: Analysis Duration
+          name: Analysis Duration (Seconds)
           description: How long to record for analysis
-          default:
-            seconds: 5
+          default: 5
           selector:
-            duration: {}
+            number:
+              min: 1
+              max: 30
+              step: 1
         max_frames:
           name: Maximum Frames
           description: Maximum number of frames to analyze
@@ -235,7 +243,7 @@ variables:
   motion_sensors: !input motion_sensors
   telegram_target: !input telegram_target
   trigger_state: !input trigger_state
-  cooldown: !input cooldown
+  cooldown_minutes: !input cooldown_minutes
   delay_notification: !input delay_notification
   importance_filtering: !input importance_filtering
   show_filtered_events: !input show_filtered_events
@@ -420,10 +428,10 @@ action:
           message: "🔇 {{ camera_name }}{{ time_suffix }} - Filtered (passive) - no alert sent"
     - stop: "Event is not important"
 
-# Notification cooldown check (matches reference blueprint exactly)
+# FIXED: Notification cooldown check - using seconds instead of duration object
 - if:
   - condition: template
-    value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).total_seconds() > delay_notification.total_seconds() }}"
+    value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}"
   then:
   
   # Wait for Frigate processing if needed
@@ -431,7 +439,8 @@ action:
     - condition: template
       value_template: "{{ media_type in ['clip', 'gif'] and has_real_frigate_event }}"
     then:
-    - delay: !input wait_for_frigate
+    - delay:
+        seconds: !input wait_for_frigate
   
   # Send media based on type selection
   - choose:
@@ -498,3 +507,111 @@ action:
           url: "{{ frigate_gif_url }}"
           filename: "{{ gif_path }}"
         continue_on_error: true
+      
+      - delay:
+          seconds: 1
+      
+      - choose:
+        - conditions:
+          - condition: template
+            value_template: "{{ states('sensor.file_exists') == 'on' }}"
+          sequence:
+          - service: telegram_bot.send_animation
+            data:
+              target: !input telegram_target
+              file: "{{ gif_path }}"
+              caption: "{{ camera_name }}{{ time_suffix }} - analyzing..."
+        default:
+        - service: camera.snapshot
+          target:
+            entity_id: "{{ camera_entity }}"
+          data:
+            filename: "{{ snapshot_path }}"
+        - service: telegram_bot.send_photo
+          data:
+            target: !input telegram_target
+            file: "{{ snapshot_path }}"
+            caption: "{{ camera_name }}{{ time_suffix }} - analyzing... (GIF unavailable)"
+
+  # Main AI Analysis with comprehensive error handling
+  - service: llmvision.stream_analyzer
+    data:
+      image_entity: ["{{ camera_entity }}"]
+      duration: !input duration
+      provider: !input provider
+      model: !input model
+      message: "{{ ai_prompt }}"
+      max_frames: !input max_frames
+      target_width: !input target_width
+      max_tokens: !input max_tokens
+      use_memory: !input use_memory
+      remember: !input store_timeline
+      generate_title: !input store_timeline
+      expose_images: !input store_timeline
+      include_filename: true
+    response_variable: analysis
+    continue_on_error: true
+
+  # Handle AI analysis result or fallback
+  - choose:
+    # Success - AI analysis worked
+    - conditions:
+      - condition: template
+        value_template: "{{ analysis is defined and analysis.response_text is defined and analysis.response_text != '' }}"
+      sequence:
+      - service: telegram_bot.send_message
+        data:
+          target: !input telegram_target
+          message: "{{ analysis.response_text }}"
+    
+    # Fallback - AI analysis failed
+    - conditions:
+      - condition: template
+        value_template: "{{ enable_fallback }}"
+      sequence:
+      - if:
+        - condition: template
+          value_template: "{{ show_api_errors }}"
+        then:
+        - service: telegram_bot.send_message
+          data:
+            target: !input telegram_target
+            message: "🚨 {{ camera_name }}{{ time_suffix }} - AI API failed - using fallback"
+      
+      # Send fallback notification based on mode
+      - choose:
+        - conditions:
+          - condition: template
+            value_template: "{{ fallback_mode == 'simple_notification' }}"
+          sequence:
+          - service: telegram_bot.send_message
+            data:
+              target: !input telegram_target
+              message: "{{ camera_name }} motion detected (AI unavailable)"
+        
+        - conditions:
+          - condition: template
+            value_template: "{{ fallback_mode == 'time_based' }}"
+          sequence:
+          - service: telegram_bot.send_message
+            data:
+              target: !input telegram_target
+              message: "{{ time_based_message }} (AI unavailable)"
+        
+        # Silent mode - do nothing
+        default: []
+
+    # No fallback enabled - send error message
+    default:
+    - service: telegram_bot.send_message
+      data:
+        target: !input telegram_target
+        message: "❌ {{ camera_name }}{{ time_suffix }} - AI analysis failed and no fallback configured"
+
+# Automation cooldown delay (using minutes)
+- if:
+  - condition: template
+    value_template: "{{ not is_manual_trigger and cooldown_minutes > 0 }}"
+  then:
+  - delay:
+      minutes: !input cooldown_minutes
