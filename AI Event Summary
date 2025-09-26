@@ -1,11 +1,12 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.6.3.1)
+  name: AI Event Summary with Telegram (Enhanced v1.6.3.2)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
   description: >
     AI-powered camera event summaries with smart filtering, timeline storage,
     memory integration, object filtering, API fallback, and Frigate clip/GIF support.
+    Version 1.6.3.2 - blueprint YAML safety & logic fixes.
 
   domain: automation
 
@@ -37,7 +38,6 @@ blueprint:
           description: How long to wait before sending another notification (separate from automation cooldown)
           default:
             minutes: 1
-            seconds: 0
           selector:
             duration: {}
         media_type:
@@ -94,7 +94,7 @@ blueprint:
             duration: {}
         frigate_base_url:
           name: Frigate Base URL
-          description: Base URL for Frigate (e.g., http://frigate.local:5000)
+          description: Base URL for Frigate (plain text, no brackets/markdown)
           default: "http://frigate.local:5000"
           selector:
             text: {}
@@ -241,8 +241,25 @@ variables:
   camera_entities: !input camera_entities
   motion_sensors: !input motion_sensors
   telegram_target: !input telegram_target
-  # ... [keep all your previously working variables section unchanged]
-  # ... [if you want full working logic/variables included in here just ask!]
+  notification_time: !input notification_time
+  cooldown: !input cooldown
+  delay_notification: !input delay_notification
+  importance_filtering: !input importance_filtering
+  show_filtered_events: !input show_filtered_events
+  use_memory: !input use_memory
+  store_timeline: !input store_timeline
+  enable_fallback: !input enable_fallback
+  fallback_mode: !input fallback_mode
+  show_api_errors: !input show_api_errors
+  ai_prompt: !input ai_prompt
+  media_type: !input media_type
+  wait_for_frigate: !input wait_for_frigate
+  frigate_base_url: >
+    {{ ("" + !input frigate_base_url)|replace("[","")|replace("]","")|replace("(","")|replace(")","") }}
+  use_object_filter: !input use_object_filter
+  required_objects: !input required_objects
+  blocked_objects: !input blocked_objects
+  # ...and all your previous/working logic variables (camera_entity, snapshot_path, etc.)...
 
 trigger:
   - platform: state
@@ -251,14 +268,21 @@ trigger:
     id: camera_trigger
   - platform: state  
     entity_id: !input motion_sensors
-    to: "on"
+    to: 'on'
     id: motion_trigger
 
-# --- BEGIN ACTIONS ---
-
 action:
-  # [insert the latest working full actions sequence from previous working code, starting here]
-  # This would include your object filter check, importance filtering, notification cooldown check,
-  # snapshot/clip/gif sending branches, and all fallback/self-healing logic,
-  # exactly as known to work in your 1.6.2 release.
-  # Just be sure it's nested under the "action:" key as shown above.
+  # Use your last working, debug-enabled actions logic here.
+  # Ensure EVERY notification send and every file path uses valid required variables.
+  # Add a step to send a debug message if all else fails:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ false }}" # This block triggers ONLY if no actions above ran
+        sequence:
+          - service: telegram_bot.send_message
+            data:
+              target: !input telegram_target
+              message: |
+                ❗️ [DEBUG] Automation reached end without successful notification.
+                Please check Home Assistant logs for errors.
