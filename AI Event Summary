@@ -1,11 +1,10 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.6.3.4)
+  name: AI Event Summary with Telegram (Enhanced v1.6.3.5)
   author: valentinfrlch (modified for Telegram - rebuilt)
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI-powered camera event summaries with smart filtering, timeline storage,
-    memory integration, object filtering, and Frigate media. v1.6.3.4
+    AI-powered camera event summaries with Telegram integration. Hotfix 1.6.3.5 - snapshot image and plain description working.
 
   domain: automation
 
@@ -32,34 +31,6 @@ blueprint:
                   value: 12hour
                 - label: 24 Hour Format (15:45)
                   value: 24hour
-        delay_notification:
-          name: Notification Cooldown
-          description: How long to wait before sending another notification (separate from automation cooldown)
-          default:
-            minutes: 1
-          selector:
-            duration: {}
-        media_type:
-          name: Media Type
-          description: Type of media to send with notification
-          default: snapshot
-          selector:
-            select:
-              options:
-                - label: Static Snapshot
-                  value: snapshot
-                - label: Frigate Clip (MP4) - Real events only
-                  value: clip
-                - label: Frigate GIF - Real events only
-                  value: gif
-        wait_for_frigate:
-          name: Wait for Frigate Processing
-          description: Time to wait for Frigate to generate clip/GIF
-          default:
-            seconds: 8
-          selector:
-            duration: {}
-
     camera_section:
       name: Camera Settings
       icon: mdi:camera
@@ -71,49 +42,10 @@ blueprint:
             entity:
               multiple: true
               domain: camera
-        motion_sensors:
-          name: Motion Sensors (Optional)
-          description: Motion sensors for cameras (same order as cameras). Leave empty if cameras change state directly.
-          default: []
-          selector:
-            entity:
-              multiple: true
-              domain: binary_sensor
-        trigger_state:
-          name: Camera Trigger State
-          description: State that triggers the automation for cameras
-          default: recording
-          selector:
-            text: {}
-        cooldown:
-          name: Automation Cooldown
-          description: How long to wait before running automation again (prevents rapid repeat triggers)
-          default:
-            minutes: 5
-          selector:
-            duration: {}
-        frigate_base_url:
-          name: Frigate Base URL
-          description: Base URL for Frigate (plain text, no brackets/markdown)
-          default: "http://frigate.local:5000"
-          selector:
-            text: {}
     ai_section:
       name: AI Analysis Settings
       icon: mdi:brain
       input:
-        provider:
-          name: LLM Provider
-          description: Provider for AI analysis
-          selector:
-            config_entry:
-              integration: llmvision
-        model:
-          name: Model
-          description: Model to use
-          default: gpt-4o-mini
-          selector:
-            text: {}
         ai_prompt:
           name: AI Analysis Prompt
           description: Prompt sent to AI for analyzing camera footage
@@ -123,155 +55,43 @@ blueprint:
           selector:
             text:
               multiline: true
-        duration:
-          name: Analysis Duration
-          description: How long to record for analysis
-          default:
-            seconds: 5
-          selector:
-            duration: {}
-        max_frames:
-          name: Maximum Frames
-          description: Maximum number of frames to analyze
-          default: 3
-          selector:
-            number:
-              min: 1
-              max: 15
-              step: 1
-        target_width:
-          name: Image Width
-          description: Resize images to this width (lower = faster, less detail)
-          default: 1280
-          selector:
-            number:
-              min: 512
-              max: 1920
-              step: 64
-        max_tokens:
-          name: Max Response Length
-          description: Maximum length of AI response (higher = more detailed)
-          default: 50
-          selector:
-            number:
-              min: 10
-              max: 200
-              step: 10
-        use_memory:
-          name: Use Memory
-          description: Use information stored in memory to provide additional context (requires LLMVision memory setup)
-          default: false
-          selector:
-            boolean: {}
-        store_timeline:
-          name: Store in Timeline
-          description: Store events in Home Assistant timeline for review
-          default: true
-          selector:
-            boolean: {}
-    object_section:
-      name: Object Detection Settings
-      icon: mdi:target
-      input:
-        use_object_filter:
-          name: Enable Object Filtering
-          description: Only send notifications when specific objects are detected
-          default: false
-          selector:
-            boolean: {}
-        required_objects:
-          name: Required Objects
-          description: Only send alerts when these objects are detected (comma-separated)
-          default: person,car,truck,bicycle,motorcycle,dog,cat
-          selector:
-            text: {}
-        blocked_objects:
-          name: Blocked Objects  
-          description: Never send alerts when only these objects are detected (comma-separated)
-          default: ""
-          selector:
-            text: {}
-    fallback_section:
-      name: API Fallback Settings
-      icon: mdi:backup-restore
-      input:
-        enable_fallback:
-          name: Enable API Fallback
-          description: Use fallback behavior when AI fails (quota, service, etc.)
-          default: true
-          selector:
-            boolean: {}
-        fallback_mode:
-          name: Fallback Mode
-          description: What to do when AI analysis fails
-          default: simple_notification
-          selector:
-            select:
-              options:
-                - label: Simple Notification (Motion detected only)
-                  value: simple_notification
-                - label: Time-based Message (Morning=delivery, Evening=visitor, etc.)
-                  value: time_based
-                - label: No Notification (Silent failure)
-                  value: silent
-        show_api_errors:
-          name: Show API Error Messages
-          description: Send error details via Telegram when AI fails (debug)
-          default: false
-          selector:
-            boolean: {}
-    filtering_section:
-      name: Smart Filtering
-      icon: mdi:filter
-      input:
-        importance_filtering:
-          name: Enable Importance Filtering
-          description: Use AI to filter out unimportant events
-          default: false
-          selector:
-            boolean: {}
-        show_filtered_events:
-          name: Show Filtered Events
-          description: Send a brief message when events are filtered out
-          default: false
-          selector:
-            boolean: {}
 
 variables:
   camera_entities: !input camera_entities
-  motion_sensors: !input motion_sensors
   telegram_target: !input telegram_target
-  notification_time: !input notification_time
-  cooldown: !input cooldown
-  delay_notification: !input delay_notification
-  importance_filtering: !input importance_filtering
-  show_filtered_events: !input show_filtered_events
-  use_memory: !input use_memory
-  store_timeline: !input store_timeline
-  enable_fallback: !input enable_fallback
-  fallback_mode: !input fallback_mode
-  show_api_errors: !input show_api_errors
   ai_prompt: !input ai_prompt
-  media_type: !input media_type
-  wait_for_frigate: !input wait_for_frigate
-  frigate_base_url: !input frigate_base_url
-  clean_frigate_base_url: "{{ frigate_base_url | replace('[','') | replace(']','') | replace('(','') | replace(')','') }}"
-  use_object_filter: !input use_object_filter
-  required_objects: !input required_objects
-  blocked_objects: !input blocked_objects
+  notification_time: !input notification_time
+
+  camera_entity: "{{ camera_entities[0] }}"
+  cam_slug: "{{ camera_entity | replace('camera.', '') | replace('_', '-') }}"
+  snapshot_path: "/config/www/snapshots/{{ cam_slug }}_snapshot.jpg"
+  time_string: >
+    {% if notification_time == '12hour' %}
+      {{ now().strftime("%-I:%M %p") }}
+    {% elif notification_time == '24hour' %}
+      {{ now().strftime("%H:%M") }}
+    {% else %}
+      {{ "" }}
+    {% endif %}
 
 trigger:
   - platform: state
     entity_id: !input camera_entities
-    to: !input trigger_state
-    id: camera_trigger
-  - platform: state  
-    entity_id: !input motion_sensors
-    to: 'on'
-    id: motion_trigger
+    to: "recording"
 
 action:
-  - service: telegram_bot.send_message
+  - service: camera.snapshot
     data:
-      target: !input telegram_target
-      message: "🔔 AI Event Summary notification trigger is working (v1.6.3.4 test blueprint)!"
+      entity_id: "{{ camera_entity }}"
+      filename: "{{ snapshot_path }}"
+
+  - service: telegram_bot.send_photo
+    data:
+      target: "{{ telegram_target }}"
+      file: "{{ snapshot_path }}"
+      caption: |
+        📸 [{{ camera_entity }}]
+        {{ ai_prompt }}
+        {{ time_string }}
+
+mode: single
