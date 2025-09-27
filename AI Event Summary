@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.2.4)
+  name: AI Event Summary with Telegram (Enhanced v1.7.3)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI-powered camera event summaries with multi-model LLM fallback within providers.
-    v1.7.2.4 - Hotfix: Proper detection of LLMVision error messages for fallback.
+    AI-powered camera event summaries with comprehensive LLM diagnostics.
+    v1.7.3 - Enhanced Diagnostics: Detailed error logging for troubleshooting model failures.
   domain: automation
   input:
     telegram_section:
@@ -207,6 +207,34 @@ blueprint:
           default: true
           selector:
             boolean: {}
+    diagnostics_section:
+      name: Diagnostic Settings
+      icon: mdi:bug-check
+      input:
+        detailed_error_logging:
+          name: Enable Detailed Error Logging
+          description: Send comprehensive error details to Telegram for each model attempt (troubleshooting)
+          default: true
+          selector:
+            boolean: {}
+        log_successful_attempts:
+          name: Log Successful Model Attempts
+          description: Send diagnostic info even when models succeed (verbose debugging)
+          default: false
+          selector:
+            boolean: {}
+        log_response_metadata:
+          name: Log Response Metadata
+          description: Include response timing, token usage, and other metadata in diagnostics
+          default: true
+          selector:
+            boolean: {}
+        diagnostic_prompt_info:
+          name: Include Prompt Information
+          description: Include prompt length and content preview in diagnostics
+          default: false
+          selector:
+            boolean: {}
     object_section:
       name: Object Detection Settings
       icon: mdi:target
@@ -345,6 +373,12 @@ variables:
   show_model_usage: !input show_model_usage
   show_fallback_notifications: !input show_fallback_notifications
   
+  # NEW: Diagnostic variables
+  detailed_error_logging: !input detailed_error_logging
+  log_successful_attempts: !input log_successful_attempts
+  log_response_metadata: !input log_response_metadata
+  diagnostic_prompt_info: !input diagnostic_prompt_info
+  
   # Enhanced Frigate data variables
   use_frigate_enhanced: !input use_frigate_enhanced
   use_face_recognition: !input use_face_recognition
@@ -353,27 +387,6 @@ variables:
   face_confidence_threshold: !input face_confidence_threshold
   
   is_manual_trigger: "{{ trigger is not defined }}"
-  
-  # FIXED: Function to detect LLMVision error responses
-  is_valid_ai_response: >
-    {%- macro is_valid_response(response_text) -%}
-      {%- if response_text is not defined or response_text == '' -%}
-        false
-      {%- elif 'Couldn\'t generate content' in response_text -%}
-        false
-      {%- elif 'Check logs for details' in response_text -%}
-        false
-      {%- elif 'API failed' in response_text -%}
-        false
-      {%- elif 'Error:' in response_text -%}
-        false
-      {%- elif 'overloaded' in response_text -%}
-        false
-      {%- else -%}
-        true
-      {%- endif -%}
-    {%- endmacro -%}
-    {{ is_valid_response }}
   
   # Camera entity detection (matches reference blueprint)
   camera_entity: >
@@ -681,14 +694,31 @@ action:
             file: "{{ snapshot_path }}"
             caption: "{{ camera_name }}{{ time_suffix }} - analyzing... (GIF unavailable)"
 
-  # FIXED: MULTI-MODEL CASCADING FALLBACK WITH PROPER ERROR DETECTION
+  # NEW: COMPREHENSIVE DIAGNOSTIC MULTI-MODEL FALLBACK
   - variables:
       analysis_success: false
       successful_model: ""
       analysis_result: ""
       model_attempt: 0
+      start_time: "{{ now().timestamp() }}"
 
-  # Try all primary models in a loop with proper error detection
+  # Diagnostic header
+  - if:
+    - condition: template
+      value_template: "{{ detailed_error_logging }}"
+    then:
+    - service: telegram_bot.send_message
+      data:
+        target: !input telegram_target
+        message: |
+          🔬 DIAGNOSTIC START: {{ camera_name }} {{ time_suffix }}
+          Models to test: {{ primary_models | join(' → ') }}
+          {% if diagnostic_prompt_info %}
+          Prompt length: {{ enhanced_ai_prompt | length }} chars
+          Prompt preview: "{{ enhanced_ai_prompt[:100] }}..."
+          {% endif %}
+
+  # Try all primary models with comprehensive diagnostics
   - repeat:
       while:
         - condition: template
@@ -696,6 +726,7 @@ action:
       sequence:
       - variables:
           current_model: "{{ primary_models[model_attempt] }}"
+          attempt_start_time: "{{ now().timestamp() }}"
       
       - if:
         - condition: template
@@ -725,9 +756,12 @@ action:
         response_variable: current_response
         continue_on_error: true
       
-      # FIXED: Check if this model gave a valid response (not an error message)
       - variables:
+          attempt_end_time: "{{ now().timestamp() }}"
+          response_time: "{{ (attempt_end_time | float) - (attempt_start_time | float) }}"
           response_text: "{{ current_response.get('response_text', '') if current_response is defined else '' }}"
+          response_error: "{{ current_response.get('error', 'none') if current_response is defined else 'undefined_response' }}"
+          response_status: "{{ current_response.get('status', 'unknown') if current_response is defined else 'no_response' }}"
           is_valid: >
             {% set text = response_text %}
             {% if text == '' or 
@@ -741,6 +775,29 @@ action:
               true
             {% endif %}
       
+      # COMPREHENSIVE DIAGNOSTIC LOGGING
+      - if:
+        - condition: template
+          value_template: "{{ detailed_error_logging and (not is_valid or log_successful_attempts) }}"
+        then:
+        - service: telegram_bot.send_message
+          data:
+            target: !input telegram_target
+            message: |
+              🔍 DIAGNOSTIC: {{ current_model }}
+              ⏱️ Response time: {{ "%.2f"|format(response_time|float) }}s
+              ✅ Valid response: {{ is_valid }}
+              📊 Status: {{ response_status }}
+              ❌ Error: {{ response_error }}
+              {% if log_response_metadata and current_response is defined %}
+              📝 Full response object keys: {{ current_response.keys() | list | join(', ') }}
+              {% endif %}
+              💬 Response (first 200 chars): "{{ response_text[:200] }}{{ '...' if response_text|length > 200 else '' }}"
+              {% if not is_valid %}
+              🚨 FAILURE REASON: {% if response_text == '' %}Empty response{% elif 'Couldn\'t generate content' in response_text %}Content generation failed{% elif 'overloaded' in response_text %}Model overloaded{% elif 'API failed' in response_text %}API error{% else %}Unknown error{% endif %}
+              {% endif %}
+
+      # Check if this model succeeded
       - if:
         - condition: template
           value_template: "{{ is_valid }}"
@@ -771,7 +828,7 @@ action:
         secondary_attempt: 0
         secondary_success: false
     
-    # Try secondary models with proper error detection
+    # Try secondary models with diagnostics
     - repeat:
         while:
           - condition: template
@@ -779,6 +836,7 @@ action:
         sequence:
         - variables:
             current_secondary_model: "{{ secondary_models[secondary_attempt] }}"
+            secondary_start_time: "{{ now().timestamp() }}"
         
         # Try current secondary model
         - service: llmvision.stream_analyzer
@@ -799,8 +857,9 @@ action:
           response_variable: secondary_response
           continue_on_error: true
         
-        # Check if this secondary model gave a valid response
         - variables:
+            secondary_end_time: "{{ now().timestamp() }}"
+            secondary_response_time: "{{ (secondary_end_time | float) - (secondary_start_time | float) }}"
             secondary_text: "{{ secondary_response.get('response_text', '') if secondary_response is defined else '' }}"
             secondary_valid: >
               {% set text = secondary_text %}
@@ -815,6 +874,20 @@ action:
                 true
               {% endif %}
         
+        # Diagnostic logging for secondary
+        - if:
+          - condition: template
+            value_template: "{{ detailed_error_logging }}"
+          then:
+          - service: telegram_bot.send_message
+            data:
+              target: !input telegram_target
+              message: |
+                🔍 SECONDARY DIAGNOSTIC: {{ current_secondary_model }}
+                ⏱️ Response time: {{ "%.2f"|format(secondary_response_time|float) }}s
+                ✅ Valid response: {{ secondary_valid }}
+                💬 Response: "{{ secondary_text[:150] }}{{ '...' if secondary_text|length > 150 else '' }}"
+        
         - if:
           - condition: template
             value_template: "{{ secondary_valid }}"
@@ -827,6 +900,24 @@ action:
           else:
           - variables:
               secondary_attempt: "{{ secondary_attempt + 1 }}"
+
+  # Diagnostic summary
+  - if:
+    - condition: template
+      value_template: "{{ detailed_error_logging }}"
+    then:
+    - variables:
+        total_time: "{{ (now().timestamp() | float) - (start_time | float) }}"
+    - service: telegram_bot.send_message
+      data:
+        target: !input telegram_target
+        message: |
+          🔬 DIAGNOSTIC SUMMARY: {{ camera_name }}
+          ⏱️ Total analysis time: {{ "%.2f"|format(total_time|float) }}s
+          🎯 Successful model: {{ successful_model if analysis_success else "NONE" }}
+          📊 Models tested: {{ model_attempt + 1 }}/{{ primary_models | length }} primary
+          {% if enable_secondary_provider and not analysis_success %}+ {{ secondary_attempt }}/{{ secondary_models | length }} secondary{% endif %}
+          ✅ Final result: {{ "SUCCESS" if analysis_success else "ALL FAILED" }}
 
   # SEND SUCCESSFUL ANALYSIS RESULT OR FINAL FALLBACK
   - choose:
