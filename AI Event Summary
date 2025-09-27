@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.2.1)
+  name: AI Event Summary with Telegram (Enhanced v1.7.2.2)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
     AI-powered camera event summaries with multi-model LLM fallback within providers.
-    v1.7.2.1 - Hotfix: Optional secondary provider configuration.
+    v1.7.2.2 - Hotfix: Optional secondary provider with proper dropdown selector.
   domain: automation
   input:
     telegram_section:
@@ -184,10 +184,11 @@ blueprint:
             boolean: {}
         secondary_provider:
           name: Secondary LLM Provider
-          description: Fallback provider when all primary models fail (only used if secondary provider is enabled)
-          default: ""
+          description: Fallback provider when all primary models fail (only required if secondary provider is enabled)
+          default: null
           selector:
-            text: {}
+            config_entry:
+              integration: llmvision
         secondary_model_list:
           name: Secondary Provider Models (Priority Order)
           description: "Semicolon-separated list of secondary models to try (e.g., llama-3.2-90b-vision-preview;llama-3.2-11b-vision-preview)"
@@ -862,10 +863,10 @@ action:
           successful_model: "{{ primary_models[4] }}"
           analysis_result: "{{ model5_analysis.response_text }}"
 
-  # SECONDARY PROVIDER FALLBACK (if all primary models failed AND secondary is enabled and configured)
+  # SECONDARY PROVIDER FALLBACK (if all primary models failed AND secondary is enabled and not null)
   - if:
     - condition: template
-      value_template: "{{ not analysis_success and enable_secondary_provider and secondary_provider != '' }}"
+      value_template: "{{ not analysis_success and enable_secondary_provider and secondary_provider is not none and secondary_provider != '' }}"
     then:
     - if:
       - condition: template
@@ -885,7 +886,7 @@ action:
         data:
           image_entity: ["{{ camera_entity }}"]
           duration: !input duration
-          provider: "{{ secondary_provider }}"
+          provider: !input secondary_provider
           model: "{{ secondary_models[0] }}"
           message: "{{ enhanced_ai_prompt }}"
           max_frames: !input max_frames
@@ -917,7 +918,7 @@ action:
         data:
           image_entity: ["{{ camera_entity }}"]
           duration: !input duration
-          provider: "{{ secondary_provider }}"
+          provider: !input secondary_provider
           model: "{{ secondary_models[1] }}"
           message: "{{ enhanced_ai_prompt }}"
           max_frames: !input max_frames
