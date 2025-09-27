@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.3)
+  name: AI Event Summary with Telegram (Enhanced v1.7.3.2)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI-powered camera event summaries with comprehensive LLM diagnostics.
-    v1.7.3 - Enhanced Diagnostics: Detailed error logging for troubleshooting model failures.
+    AI-powered camera event summaries with optimized model order and toggleable diagnostics.
+    v1.7.3.2 - Optimized Model Order: Alternating reliable/premium models for best performance.
   domain: automation
   input:
     telegram_section:
@@ -113,8 +113,8 @@ blueprint:
               integration: llmvision
         model_list:
           name: Primary Provider Models (Priority Order)
-          description: "Semicolon-separated list of models to try in order (e.g., gemini-2.5-pro;gemini-2.5-flash;gemini-2.0-flash)"
-          default: "gemini-2.5-pro;gemini-2.5-flash;gemini-2.0-flash;gemini-1.5-flash;gemini-1.5-flash-8b"
+          description: "Semicolon-separated list of models to try in order (alternating reliable/premium strategy)"
+          default: "gemini-2.0-flash;gemini-2.5-pro;gemini-2.0-flash-lite;gemini-2.5-flash;gemini-1.5-flash;gemini-2.5-flash-lite"
           selector:
             text: {}
         ai_prompt:
@@ -204,16 +204,22 @@ blueprint:
         show_fallback_notifications:
           name: Show Fallback Attempts
           description: Send notification when trying fallback models (debug)
-          default: true
+          default: false
           selector:
             boolean: {}
     diagnostics_section:
       name: Diagnostic Settings
       icon: mdi:bug-check
       input:
+        enable_diagnostics:
+          name: Enable All Diagnostics
+          description: Master switch for all diagnostic messages (turn OFF for clean production use)
+          default: false
+          selector:
+            boolean: {}
         detailed_error_logging:
           name: Enable Detailed Error Logging
-          description: Send comprehensive error details to Telegram for each model attempt (troubleshooting)
+          description: Send comprehensive error details to Telegram for each model attempt (only if diagnostics enabled)
           default: true
           selector:
             boolean: {}
@@ -373,7 +379,8 @@ variables:
   show_model_usage: !input show_model_usage
   show_fallback_notifications: !input show_fallback_notifications
   
-  # NEW: Diagnostic variables
+  # NEW: Master diagnostic control
+  enable_diagnostics: !input enable_diagnostics
   detailed_error_logging: !input detailed_error_logging
   log_successful_attempts: !input log_successful_attempts
   log_response_metadata: !input log_response_metadata
@@ -694,7 +701,7 @@ action:
             file: "{{ snapshot_path }}"
             caption: "{{ camera_name }}{{ time_suffix }} - analyzing... (GIF unavailable)"
 
-  # NEW: COMPREHENSIVE DIAGNOSTIC MULTI-MODEL FALLBACK
+  # OPTIMIZED MULTI-MODEL FALLBACK WITH TOGGLEABLE DIAGNOSTICS
   - variables:
       analysis_success: false
       successful_model: ""
@@ -702,10 +709,10 @@ action:
       model_attempt: 0
       start_time: "{{ now().timestamp() }}"
 
-  # Diagnostic header
+  # Diagnostic header (only if diagnostics enabled)
   - if:
     - condition: template
-      value_template: "{{ detailed_error_logging }}"
+      value_template: "{{ enable_diagnostics and detailed_error_logging }}"
     then:
     - service: telegram_bot.send_message
       data:
@@ -718,7 +725,7 @@ action:
           Prompt preview: "{{ enhanced_ai_prompt[:100] }}..."
           {% endif %}
 
-  # Try all primary models with comprehensive diagnostics
+  # Try all primary models with CONDITIONAL diagnostics
   - repeat:
       while:
         - condition: template
@@ -775,10 +782,10 @@ action:
               true
             {% endif %}
       
-      # COMPREHENSIVE DIAGNOSTIC LOGGING
+      # CONDITIONAL DIAGNOSTIC LOGGING (only if diagnostics enabled)
       - if:
         - condition: template
-          value_template: "{{ detailed_error_logging and (not is_valid or log_successful_attempts) }}"
+          value_template: "{{ enable_diagnostics and detailed_error_logging and (not is_valid or log_successful_attempts) }}"
         then:
         - service: telegram_bot.send_message
           data:
@@ -828,7 +835,7 @@ action:
         secondary_attempt: 0
         secondary_success: false
     
-    # Try secondary models with diagnostics
+    # Try secondary models with conditional diagnostics
     - repeat:
         while:
           - condition: template
@@ -874,10 +881,10 @@ action:
                 true
               {% endif %}
         
-        # Diagnostic logging for secondary
+        # Conditional diagnostic logging for secondary
         - if:
           - condition: template
-            value_template: "{{ detailed_error_logging }}"
+            value_template: "{{ enable_diagnostics and detailed_error_logging }}"
           then:
           - service: telegram_bot.send_message
             data:
@@ -901,10 +908,10 @@ action:
           - variables:
               secondary_attempt: "{{ secondary_attempt + 1 }}"
 
-  # Diagnostic summary
+  # Conditional diagnostic summary
   - if:
     - condition: template
-      value_template: "{{ detailed_error_logging }}"
+      value_template: "{{ enable_diagnostics and detailed_error_logging }}"
     then:
     - variables:
         total_time: "{{ (now().timestamp() | float) - (start_time | float) }}"
