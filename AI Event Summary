@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.0.1)
+  name: AI Event Summary with Telegram (Enhanced v1.7.1)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI-powered camera event summaries with Frigate v0.16 enhanced analysis integration.
-    v1.7.0.1 - Hotfix: Enhanced prompt safety and Google API compatibility.
+    AI-powered camera event summaries with LLM provider fallback mechanism.
+    v1.7.1 - LLM Fallback: Primary + Secondary LLM providers for reliability.
   domain: automation
   input:
     telegram_section:
@@ -102,18 +102,18 @@ blueprint:
           selector:
             text: {}
     ai_section:
-      name: AI Analysis Settings
+      name: Primary AI Settings
       icon: mdi:brain
       input:
         provider:
-          name: LLM Provider
-          description: Provider for AI analysis
+          name: Primary LLM Provider
+          description: Primary provider for AI analysis
           selector:
             config_entry:
               integration: llmvision
         model:
-          name: Model
-          description: Model to use
+          name: Primary Model
+          description: Primary model to use
           default: "gpt-4o-mini"
           selector:
             text: {}
@@ -169,6 +169,52 @@ blueprint:
         store_timeline:
           name: Store in Timeline
           description: Store events in Home Assistant timeline for review
+          default: true
+          selector:
+            boolean: {}
+    llm_fallback_section:
+      name: LLM Fallback Settings
+      icon: mdi:backup-restore-alert
+      input:
+        enable_llm_fallback:
+          name: Enable LLM Fallback
+          description: Use secondary LLM when primary fails
+          default: true
+          selector:
+            boolean: {}
+        fallback_provider:
+          name: Secondary LLM Provider
+          description: Fallback provider when primary fails
+          selector:
+            config_entry:
+              integration: llmvision
+        fallback_model:
+          name: Secondary Model
+          description: Fallback model to use
+          default: "gemini-2.0-flash-exp"
+          selector:
+            text: {}
+        enable_tertiary_fallback:
+          name: Enable Third LLM Fallback
+          description: Use third LLM when both primary and secondary fail
+          default: false
+          selector:
+            boolean: {}
+        tertiary_provider:
+          name: Tertiary LLM Provider
+          description: Third fallback provider
+          selector:
+            config_entry:
+              integration: llmvision
+        tertiary_model:
+          name: Tertiary Model
+          description: Third fallback model to use
+          default: "claude-3-haiku-20240307"
+          selector:
+            text: {}
+        show_fallback_usage:
+          name: Show Fallback Usage
+          description: Send notification when fallback LLMs are used
           default: true
           selector:
             boolean: {}
@@ -232,18 +278,18 @@ blueprint:
               max: 100
               step: 5
     fallback_section:
-      name: API Fallback Settings
+      name: Non-LLM Fallback Settings
       icon: mdi:backup-restore
       input:
         enable_fallback:
-          name: Enable API Fallback
-          description: Use fallback behavior when AI API fails (quota exceeded, service unavailable, etc.)
+          name: Enable Non-LLM Fallback
+          description: Use basic fallback when all LLMs fail
           default: true
           selector:
             boolean: {}
         fallback_mode:
           name: Fallback Mode
-          description: What to do when AI analysis fails
+          description: What to do when all AI analysis fails
           default: "simple_notification"
           selector:
             select:
@@ -300,7 +346,16 @@ variables:
   required_objects: !input required_objects
   blocked_objects: !input blocked_objects
   
-  # NEW: Enhanced Frigate data variables
+  # LLM Fallback variables
+  enable_llm_fallback: !input enable_llm_fallback
+  fallback_provider: !input fallback_provider
+  fallback_model: !input fallback_model
+  enable_tertiary_fallback: !input enable_tertiary_fallback
+  tertiary_provider: !input tertiary_provider
+  tertiary_model: !input tertiary_model
+  show_fallback_usage: !input show_fallback_usage
+  
+  # Enhanced Frigate data variables
   use_frigate_enhanced: !input use_frigate_enhanced
   use_face_recognition: !input use_face_recognition
   include_confidence_scores: !input include_confidence_scores
@@ -384,7 +439,7 @@ variables:
       {{ "" }}
     {% endif %}
   
-  # FIXED: Enhanced AI prompt - safer version
+  # Enhanced AI prompt - safer version
   enhanced_ai_prompt: >
     {% if frigate_context and frigate_context != "" %}
       {{ frigate_context }} {{ ai_prompt }}
@@ -510,7 +565,7 @@ action:
           message: "🔇 {{ camera_name }}{{ time_suffix }} - Filtered (passive) - no alert sent"
     - stop: "Event is not important"
 
-# FIXED: Notification cooldown check - using seconds instead of duration object
+# Notification cooldown check
 - if:
   - condition: template
     value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}"
@@ -615,7 +670,8 @@ action:
             file: "{{ snapshot_path }}"
             caption: "{{ camera_name }}{{ time_suffix }} - analyzing... (GIF unavailable)"
 
-  # Main AI Analysis with enhanced prompt - WITH RETRY LOGIC
+  # MULTI-LLM FALLBACK ANALYSIS CHAIN
+  # Try Primary LLM
   - service: llmvision.stream_analyzer
     data:
       image_entity: ["{{ camera_entity }}"]
@@ -631,64 +687,234 @@ action:
       generate_title: !input store_timeline
       expose_images: !input store_timeline
       include_filename: true
-    response_variable: analysis
+    response_variable: primary_analysis
     continue_on_error: true
 
-  # Handle AI analysis result or fallback
-  - choose:
-    # Success - AI analysis worked
-    - conditions:
+  # Check Primary Success
+  - if:
+    - condition: template
+      value_template: "{{ primary_analysis is defined and primary_analysis.response_text is defined and primary_analysis.response_text != '' }}"
+    then:
+    # Primary Success
+    - service: telegram_bot.send_message
+      data:
+        target: !input telegram_target
+        message: "{{ primary_analysis.response_text }}"
+    else:
+    # Primary Failed - Try Secondary LLM
+    - if:
       - condition: template
-        value_template: "{{ analysis is defined and analysis.response_text is defined and analysis.response_text != '' }}"
-      sequence:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "{{ analysis.response_text }}"
-    
-    # Fallback - AI analysis failed
-    - conditions:
-      - condition: template
-        value_template: "{{ enable_fallback }}"
-      sequence:
+        value_template: "{{ enable_llm_fallback }}"
+      then:
       - if:
         - condition: template
-          value_template: "{{ show_api_errors }}"
+          value_template: "{{ show_fallback_usage }}"
         then:
         - service: telegram_bot.send_message
           data:
             target: !input telegram_target
-            message: "🚨 {{ camera_name }}{{ time_suffix }} - AI API failed - using fallback"
-      
-      # Send fallback notification based on mode
-      - choose:
-        - conditions:
-          - condition: template
-            value_template: "{{ fallback_mode == 'simple_notification' }}"
-          sequence:
-          - service: telegram_bot.send_message
-            data:
-              target: !input telegram_target
-              message: "{{ camera_name }} motion detected (AI unavailable)"
-        
-        - conditions:
-          - condition: template
-            value_template: "{{ fallback_mode == 'time_based' }}"
-          sequence:
-          - service: telegram_bot.send_message
-            data:
-              target: !input telegram_target
-              message: "{{ time_based_message }} (AI unavailable)"
-        
-        # Silent mode - do nothing
-        default: []
+            message: "🔄 {{ camera_name }} - Primary LLM failed, trying secondary..."
 
-    # No fallback enabled - send error message
-    default:
-    - service: telegram_bot.send_message
-      data:
-        target: !input telegram_target
-        message: "❌ {{ camera_name }}{{ time_suffix }} - AI analysis failed and no fallback configured"
+      - service: llmvision.stream_analyzer
+        data:
+          image_entity: ["{{ camera_entity }}"]
+          duration: !input duration
+          provider: !input fallback_provider
+          model: !input fallback_model
+          message: "{{ enhanced_ai_prompt }}"
+          max_frames: !input max_frames
+          target_width: !input target_width
+          max_tokens: !input max_tokens
+          use_memory: false
+          remember: false
+          generate_title: false
+          expose_images: false
+          include_filename: true
+        response_variable: secondary_analysis
+        continue_on_error: true
+
+      # Check Secondary Success
+      - if:
+        - condition: template
+          value_template: "{{ secondary_analysis is defined and secondary_analysis.response_text is defined and secondary_analysis.response_text != '' }}"
+        then:
+        # Secondary Success
+        - service: telegram_bot.send_message
+          data:
+            target: !input telegram_target
+            message: "{{ secondary_analysis.response_text }} (📱 fallback LLM)"
+        else:
+        # Secondary Failed - Try Tertiary LLM
+        - if:
+          - condition: template
+            value_template: "{{ enable_tertiary_fallback }}"
+          then:
+          - if:
+            - condition: template
+              value_template: "{{ show_fallback_usage }}"
+            then:
+            - service: telegram_bot.send_message
+              data:
+                target: !input telegram_target
+                message: "🔄 {{ camera_name }} - Secondary LLM failed, trying tertiary..."
+
+          - service: llmvision.stream_analyzer
+            data:
+              image_entity: ["{{ camera_entity }}"]
+              duration: !input duration
+              provider: !input tertiary_provider
+              model: !input tertiary_model
+              message: "{{ enhanced_ai_prompt }}"
+              max_frames: !input max_frames
+              target_width: !input target_width
+              max_tokens: !input max_tokens
+              use_memory: false
+              remember: false
+              generate_title: false
+              expose_images: false
+              include_filename: true
+            response_variable: tertiary_analysis
+            continue_on_error: true
+
+          # Check Tertiary Success
+          - if:
+            - condition: template
+              value_template: "{{ tertiary_analysis is defined and tertiary_analysis.response_text is defined and tertiary_analysis.response_text != '' }}"
+            then:
+            # Tertiary Success
+            - service: telegram_bot.send_message
+              data:
+                target: !input telegram_target
+                message: "{{ tertiary_analysis.response_text }} (🆘 tertiary LLM)"
+            else:
+            # All LLMs Failed - Use Non-LLM Fallback
+            - if:
+              - condition: template
+                value_template: "{{ enable_fallback }}"
+              then:
+              - if:
+                - condition: template
+                  value_template: "{{ show_api_errors }}"
+                then:
+                - service: telegram_bot.send_message
+                  data:
+                    target: !input telegram_target
+                    message: "🚨 {{ camera_name }}{{ time_suffix }} - All LLMs failed - using basic fallback"
+              
+              # Send fallback notification based on mode
+              - choose:
+                - conditions:
+                  - condition: template
+                    value_template: "{{ fallback_mode == 'simple_notification' }}"
+                  sequence:
+                  - service: telegram_bot.send_message
+                    data:
+                      target: !input telegram_target
+                      message: "{{ camera_name }} motion detected (All AI unavailable)"
+                
+                - conditions:
+                  - condition: template
+                    value_template: "{{ fallback_mode == 'time_based' }}"
+                  sequence:
+                  - service: telegram_bot.send_message
+                    data:
+                      target: !input telegram_target
+                      message: "{{ time_based_message }} (All AI unavailable)"
+                
+                # Silent mode - do nothing
+                default: []
+              else:
+              # No fallback enabled
+              - service: telegram_bot.send_message
+                data:
+                  target: !input telegram_target
+                  message: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
+          else:
+          # No tertiary fallback - Use Non-LLM Fallback
+          - if:
+            - condition: template
+              value_template: "{{ enable_fallback }}"
+            then:
+            - if:
+              - condition: template
+                value_template: "{{ show_api_errors }}"
+              then:
+              - service: telegram_bot.send_message
+                data:
+                  target: !input telegram_target
+                  message: "🚨 {{ camera_name }}{{ time_suffix }} - Primary and secondary LLMs failed - using basic fallback"
+            
+            # Send fallback notification based on mode
+            - choose:
+              - conditions:
+                - condition: template
+                  value_template: "{{ fallback_mode == 'simple_notification' }}"
+                sequence:
+                - service: telegram_bot.send_message
+                  data:
+                    target: !input telegram_target
+                    message: "{{ camera_name }} motion detected (AI unavailable)"
+              
+              - conditions:
+                - condition: template
+                  value_template: "{{ fallback_mode == 'time_based' }}"
+                sequence:
+                - service: telegram_bot.send_message
+                  data:
+                    target: !input telegram_target
+                    message: "{{ time_based_message }} (AI unavailable)"
+              
+              # Silent mode - do nothing
+              default: []
+            else:
+            # No fallback enabled
+            - service: telegram_bot.send_message
+              data:
+                target: !input telegram_target
+                message: "❌ {{ camera_name }}{{ time_suffix }} - Primary and secondary AI analysis failed"
+      else:
+      # No LLM fallback enabled - Use Non-LLM Fallback
+      - if:
+        - condition: template
+          value_template: "{{ enable_fallback }}"
+        then:
+        - if:
+          - condition: template
+            value_template: "{{ show_api_errors }}"
+          then:
+          - service: telegram_bot.send_message
+            data:
+              target: !input telegram_target
+              message: "🚨 {{ camera_name }}{{ time_suffix }} - Primary LLM failed - using basic fallback"
+        
+        # Send fallback notification based on mode
+        - choose:
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'simple_notification' }}"
+            sequence:
+            - service: telegram_bot.send_message
+              data:
+                target: !input telegram_target
+                message: "{{ camera_name }} motion detected (AI unavailable)"
+          
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'time_based' }}"
+            sequence:
+            - service: telegram_bot.send_message
+              data:
+                target: !input telegram_target
+                message: "{{ time_based_message }} (AI unavailable)"
+          
+          # Silent mode - do nothing
+          default: []
+        else:
+        # No fallback enabled
+        - service: telegram_bot.send_message
+          data:
+            target: !input telegram_target
+            message: "❌ {{ camera_name }}{{ time_suffix }} - AI analysis failed and no fallback configured"
 
 # Automation cooldown delay (using minutes)
 - if:
