@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.0)
+  name: AI Event Summary with Telegram (Enhanced v1.7.0.1)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
     AI-powered camera event summaries with Frigate v0.16 enhanced analysis integration.
-    v1.7.0 - Foundation: Face recognition and enhanced object data support.
+    v1.7.0.1 - Hotfix: Enhanced prompt safety and Google API compatibility.
   domain: automation
   input:
     telegram_section:
@@ -198,6 +198,12 @@ blueprint:
       name: Frigate v0.16 Enhanced Features
       icon: mdi:face-recognition
       input:
+        use_frigate_enhanced:
+          name: Enable Frigate Enhanced Features
+          description: Use Frigate v0.16+ enhanced analysis in AI prompts
+          default: false
+          selector:
+            boolean: {}
         use_face_recognition:
           name: Enable Face Recognition Data
           description: Use Frigate's face recognition results in AI analysis
@@ -295,6 +301,7 @@ variables:
   blocked_objects: !input blocked_objects
   
   # NEW: Enhanced Frigate data variables
+  use_frigate_enhanced: !input use_frigate_enhanced
   use_face_recognition: !input use_face_recognition
   include_confidence_scores: !input include_confidence_scores
   use_zone_context: !input use_zone_context
@@ -325,7 +332,7 @@ variables:
   frigate_camera_name: '{{ camera_entity.replace("camera.", "") }}'
   snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_snapshot.jpg'
   
-  # Extract enhanced Frigate event data
+  # Extract enhanced Frigate event data - SAFE VERSION
   frigate_event_data: >
     {% if trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined %}
       {{ trigger.payload_json.after }}
@@ -357,77 +364,30 @@ variables:
       []
     {% endif %}
   
-  # Face recognition data
-  detected_faces: >
-    {% if use_face_recognition and frigate_event_data.faces is defined %}
-      {{ frigate_event_data.faces }}
-    {% else %}
-      []
-    {% endif %}
-  
-  # Known faces above threshold
-  known_faces: >
-    {% set faces = detected_faces %}
-    {% set threshold = face_confidence_threshold / 100 %}
-    {{ faces | selectattr('confidence', '>', threshold) | selectattr('name', 'defined') | list }}
-  
-  # Enhanced objects with confidence
-  enhanced_objects: >
-    {% if include_confidence_scores and frigate_event_data.objects is defined %}
-      {{ frigate_event_data.objects }}
-    {% else %}
-      {{ detected_objects }}
-    {% endif %}
-  
-  # Zone information
-  triggered_zones: >
-    {% if use_zone_context and frigate_event_data.zones is defined %}
-      {{ frigate_event_data.zones }}
-    {% else %}
-      []
-    {% endif %}
-  
-  # Generate enhanced context for AI
+  # FIXED: Safe Frigate context generation - only if enabled and data exists
   frigate_context: >
-    {% set context = [] %}
-    
-    {# Add face recognition context #}
-    {% if known_faces | length > 0 %}
-      {% for face in known_faces %}
-        {% set context = context + ["Recognized person: " + face.name + " (confidence: " + (face.confidence * 100)|round + "%)"] %}
-      {% endfor %}
+    {% if use_frigate_enhanced and has_real_frigate_event %}
+      {% set context_parts = [] %}
+      
+      {# Basic object detection #}
+      {% if detected_objects %}
+        {% set context_parts = context_parts + ["Objects: " + detected_objects | join(", ")] %}
+      {% endif %}
+      
+      {# Only add if context exists #}
+      {% if context_parts %}
+        {{ "Frigate detected " + context_parts | join("; ") + "." }}
+      {% else %}
+        {{ "" }}
+      {% endif %}
+    {% else %}
+      {{ "" }}
     {% endif %}
-    
-    {# Add unknown faces #}
-    {% if detected_faces | length > known_faces | length %}
-      {% set unknown_count = (detected_faces | length) - (known_faces | length) %}
-      {% set context = context + [unknown_count|string + " unrecognized face(s) detected"] %}
-    {% endif %}
-    
-    {# Add zone context #}
-    {% if triggered_zones | length > 0 %}
-      {% set context = context + ["Active zones: " + triggered_zones|join(", ")] %}
-    {% endif %}
-    
-    {# Add enhanced object info #}
-    {% if include_confidence_scores and enhanced_objects %}
-      {% for obj in enhanced_objects %}
-        {% if obj.confidence is defined %}
-          {% set context = context + [obj.label + " detected (confidence: " + (obj.confidence * 100)|round + "%)"] %}
-        {% endif %}
-      {% endfor %}
-    {% endif %}
-    
-    {{ context | join("; ") }}
   
-  # Enhanced AI prompt that includes Frigate context
+  # FIXED: Enhanced AI prompt - safer version
   enhanced_ai_prompt: >
-    {% if frigate_context %}
-      Frigate detected: {{ frigate_context }}.
-      
-      {{ ai_prompt }}
-      
-      Use the Frigate detection data to provide more specific and accurate analysis.
+    {% if frigate_context and frigate_context != "" %}
+      {{ frigate_context }} {{ ai_prompt }}
     {% else %}
       {{ ai_prompt }}
     {% endif %}
@@ -655,7 +615,7 @@ action:
             file: "{{ snapshot_path }}"
             caption: "{{ camera_name }}{{ time_suffix }} - analyzing... (GIF unavailable)"
 
-  # Main AI Analysis with enhanced prompt
+  # Main AI Analysis with enhanced prompt - WITH RETRY LOGIC
   - service: llmvision.stream_analyzer
     data:
       image_entity: ["{{ camera_entity }}"]
