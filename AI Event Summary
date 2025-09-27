@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.2.3)
+  name: AI Event Summary with Telegram (Enhanced v1.7.2.4)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
     AI-powered camera event summaries with multi-model LLM fallback within providers.
-    v1.7.2.3 - Hotfix: Improved error handling and faster fallback logic.
+    v1.7.2.4 - Hotfix: Proper detection of LLMVision error messages for fallback.
   domain: automation
   input:
     telegram_section:
@@ -204,12 +204,6 @@ blueprint:
         show_fallback_notifications:
           name: Show Fallback Attempts
           description: Send notification when trying fallback models (debug)
-          default: false
-          selector:
-            boolean: {}
-        quick_fallback_on_google_errors:
-          name: Quick Fallback on Google Errors
-          description: Immediately try next model on 'overloaded' or 'no content' Google errors without waiting
           default: true
           selector:
             boolean: {}
@@ -350,7 +344,6 @@ variables:
   secondary_models: "{{ secondary_model_list.split(';') | map('trim') | list }}"
   show_model_usage: !input show_model_usage
   show_fallback_notifications: !input show_fallback_notifications
-  quick_fallback_on_google_errors: !input quick_fallback_on_google_errors
   
   # Enhanced Frigate data variables
   use_frigate_enhanced: !input use_frigate_enhanced
@@ -360,6 +353,27 @@ variables:
   face_confidence_threshold: !input face_confidence_threshold
   
   is_manual_trigger: "{{ trigger is not defined }}"
+  
+  # FIXED: Function to detect LLMVision error responses
+  is_valid_ai_response: >
+    {%- macro is_valid_response(response_text) -%}
+      {%- if response_text is not defined or response_text == '' -%}
+        false
+      {%- elif 'Couldn\'t generate content' in response_text -%}
+        false
+      {%- elif 'Check logs for details' in response_text -%}
+        false
+      {%- elif 'API failed' in response_text -%}
+        false
+      {%- elif 'Error:' in response_text -%}
+        false
+      {%- elif 'overloaded' in response_text -%}
+        false
+      {%- else -%}
+        true
+      {%- endif -%}
+    {%- endmacro -%}
+    {{ is_valid_response }}
   
   # Camera entity detection (matches reference blueprint)
   camera_entity: >
@@ -667,14 +681,14 @@ action:
             file: "{{ snapshot_path }}"
             caption: "{{ camera_name }}{{ time_suffix }} - analyzing... (GIF unavailable)"
 
-  # IMPROVED MULTI-MODEL CASCADING FALLBACK WITH TIMEOUT
+  # FIXED: MULTI-MODEL CASCADING FALLBACK WITH PROPER ERROR DETECTION
   - variables:
       analysis_success: false
       successful_model: ""
       analysis_result: ""
       model_attempt: 0
 
-  # NEW: Try all primary models in a loop with timeout protection
+  # Try all primary models in a loop with proper error detection
   - repeat:
       while:
         - condition: template
@@ -692,44 +706,54 @@ action:
             target: !input telegram_target
             message: "🔄 {{ camera_name }} - {{ primary_models[model_attempt-1] }} failed, trying {{ current_model }}..."
       
-      # Try current model with short timeout
-      - timeout: "30s"
-        sequence:
-        - service: llmvision.stream_analyzer
-          data:
-            image_entity: ["{{ camera_entity }}"]
-            duration: !input duration
-            provider: !input provider
-            model: "{{ current_model }}"
-            message: "{{ enhanced_ai_prompt }}"
-            max_frames: !input max_frames
-            target_width: !input target_width
-            max_tokens: !input max_tokens
-            use_memory: "{{ model_attempt == 0 and use_memory }}"
-            remember: "{{ model_attempt == 0 and store_timeline }}"
-            generate_title: "{{ model_attempt == 0 and store_timeline }}"
-            expose_images: "{{ model_attempt == 0 and store_timeline }}"
-            include_filename: true
-          response_variable: "model{{ model_attempt + 1 }}_analysis"
-          continue_on_error: true
+      # Try current model
+      - service: llmvision.stream_analyzer
+        data:
+          image_entity: ["{{ camera_entity }}"]
+          duration: !input duration
+          provider: !input provider
+          model: "{{ current_model }}"
+          message: "{{ enhanced_ai_prompt }}"
+          max_frames: !input max_frames
+          target_width: !input target_width
+          max_tokens: !input max_tokens
+          use_memory: "{{ model_attempt == 0 and use_memory }}"
+          remember: "{{ model_attempt == 0 and store_timeline }}"
+          generate_title: "{{ model_attempt == 0 and store_timeline }}"
+          expose_images: "{{ model_attempt == 0 and store_timeline }}"
+          include_filename: true
+        response_variable: current_response
+        continue_on_error: true
       
-      # Check if this model succeeded
+      # FIXED: Check if this model gave a valid response (not an error message)
       - variables:
-          model_response: "{{ vars.get('model' + (model_attempt + 1)|string + '_analysis', {}) }}"
+          response_text: "{{ current_response.get('response_text', '') if current_response is defined else '' }}"
+          is_valid: >
+            {% set text = response_text %}
+            {% if text == '' or 
+                 'Couldn\'t generate content' in text or 
+                 'Check logs for details' in text or 
+                 'API failed' in text or 
+                 'Error:' in text or 
+                 'overloaded' in text %}
+              false
+            {% else %}
+              true
+            {% endif %}
       
       - if:
         - condition: template
-          value_template: "{{ model_response is defined and model_response.get('response_text', '') != '' }}"
+          value_template: "{{ is_valid }}"
         then:
         - variables:
             analysis_success: true
             successful_model: "{{ current_model }}"
-            analysis_result: "{{ model_response.response_text }}"
+            analysis_result: "{{ response_text }}"
         else:
         - variables:
             model_attempt: "{{ model_attempt + 1 }}"
 
-  # SECONDARY PROVIDER FALLBACK (if all primary models failed AND secondary is enabled)
+  # SECONDARY PROVIDER FALLBACK (if all primary models failed)
   - if:
     - condition: template
       value_template: "{{ not analysis_success and enable_secondary_provider and secondary_provider is not none and secondary_provider != '' }}"
@@ -747,7 +771,7 @@ action:
         secondary_attempt: 0
         secondary_success: false
     
-    # Try secondary models with timeout protection
+    # Try secondary models with proper error detection
     - repeat:
         while:
           - condition: template
@@ -756,40 +780,50 @@ action:
         - variables:
             current_secondary_model: "{{ secondary_models[secondary_attempt] }}"
         
-        # Try current secondary model with short timeout
-        - timeout: "30s"
-          sequence:
-          - service: llmvision.stream_analyzer
-            data:
-              image_entity: ["{{ camera_entity }}"]
-              duration: !input duration
-              provider: !input secondary_provider
-              model: "{{ current_secondary_model }}"
-              message: "{{ enhanced_ai_prompt }}"
-              max_frames: !input max_frames
-              target_width: !input target_width
-              max_tokens: !input max_tokens
-              use_memory: false
-              remember: false
-              generate_title: false
-              expose_images: false
-              include_filename: true
-            response_variable: "secondary{{ secondary_attempt + 1 }}_analysis"
-            continue_on_error: true
+        # Try current secondary model
+        - service: llmvision.stream_analyzer
+          data:
+            image_entity: ["{{ camera_entity }}"]
+            duration: !input duration
+            provider: !input secondary_provider
+            model: "{{ current_secondary_model }}"
+            message: "{{ enhanced_ai_prompt }}"
+            max_frames: !input max_frames
+            target_width: !input target_width
+            max_tokens: !input max_tokens
+            use_memory: false
+            remember: false
+            generate_title: false
+            expose_images: false
+            include_filename: true
+          response_variable: secondary_response
+          continue_on_error: true
         
-        # Check if this secondary model succeeded
+        # Check if this secondary model gave a valid response
         - variables:
-            secondary_response: "{{ vars.get('secondary' + (secondary_attempt + 1)|string + '_analysis', {}) }}"
+            secondary_text: "{{ secondary_response.get('response_text', '') if secondary_response is defined else '' }}"
+            secondary_valid: >
+              {% set text = secondary_text %}
+              {% if text == '' or 
+                   'Couldn\'t generate content' in text or 
+                   'Check logs for details' in text or 
+                   'API failed' in text or 
+                   'Error:' in text or 
+                   'overloaded' in text %}
+                false
+              {% else %}
+                true
+              {% endif %}
         
         - if:
           - condition: template
-            value_template: "{{ secondary_response is defined and secondary_response.get('response_text', '') != '' }}"
+            value_template: "{{ secondary_valid }}"
           then:
           - variables:
               analysis_success: true
               secondary_success: true
               successful_model: "{{ current_secondary_model }} (secondary)"
-              analysis_result: "{{ secondary_response.response_text }}"
+              analysis_result: "{{ secondary_text }}"
           else:
           - variables:
               secondary_attempt: "{{ secondary_attempt + 1 }}"
