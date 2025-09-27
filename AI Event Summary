@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.3.2)
+  name: AI Event Summary with Telegram (Enhanced v1.7.4)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI-powered camera event summaries with optimized model order and toggleable diagnostics.
-    v1.7.3.2 - Optimized Model Order: Alternating reliable/premium models for best performance.
+    AI-powered camera event summaries with progressive message updates in Telegram.
+    v1.7.4 - Progressive Updates: Single message that updates from "analyzing" through fallbacks to final AI result.
   domain: automation
   input:
     telegram_section:
@@ -61,6 +61,12 @@ blueprint:
               min: 1
               max: 30
               step: 1
+        show_progress_updates:
+          name: Show Progress Updates
+          description: Update message text to show analysis progress (analyzing → trying model X → final result)
+          default: true
+          selector:
+            boolean: {}
     camera_section:
       name: Camera Settings
       icon: mdi:camera
@@ -201,12 +207,6 @@ blueprint:
           default: true
           selector:
             boolean: {}
-        show_fallback_notifications:
-          name: Show Fallback Attempts
-          description: Send notification when trying fallback models (debug)
-          default: false
-          selector:
-            boolean: {}
     diagnostics_section:
       name: Diagnostic Settings
       icon: mdi:bug-check
@@ -221,24 +221,6 @@ blueprint:
           name: Enable Detailed Error Logging
           description: Send comprehensive error details to Telegram for each model attempt (only if diagnostics enabled)
           default: true
-          selector:
-            boolean: {}
-        log_successful_attempts:
-          name: Log Successful Model Attempts
-          description: Send diagnostic info even when models succeed (verbose debugging)
-          default: false
-          selector:
-            boolean: {}
-        log_response_metadata:
-          name: Log Response Metadata
-          description: Include response timing, token usage, and other metadata in diagnostics
-          default: true
-          selector:
-            boolean: {}
-        diagnostic_prompt_info:
-          name: Include Prompt Information
-          description: Include prompt length and content preview in diagnostics
-          default: false
           selector:
             boolean: {}
     object_section:
@@ -368,6 +350,7 @@ variables:
   use_object_filter: !input use_object_filter
   required_objects: !input required_objects
   blocked_objects: !input blocked_objects
+  show_progress_updates: !input show_progress_updates
   
   # Multi-model fallback variables
   model_list: !input model_list
@@ -377,14 +360,10 @@ variables:
   secondary_model_list: !input secondary_model_list
   secondary_models: "{{ secondary_model_list.split(';') | map('trim') | list }}"
   show_model_usage: !input show_model_usage
-  show_fallback_notifications: !input show_fallback_notifications
   
-  # NEW: Master diagnostic control
+  # Diagnostic variables
   enable_diagnostics: !input enable_diagnostics
   detailed_error_logging: !input detailed_error_logging
-  log_successful_attempts: !input log_successful_attempts
-  log_response_metadata: !input log_response_metadata
-  diagnostic_prompt_info: !input diagnostic_prompt_info
   
   # Enhanced Frigate data variables
   use_frigate_enhanced: !input use_frigate_enhanced
@@ -610,7 +589,12 @@ action:
     - delay:
         seconds: !input wait_for_frigate
   
-  # Send media based on type selection
+  # NEW: PROGRESSIVE MESSAGE UPDATES - Send initial message with media
+  - variables:
+      initial_message_sent: false
+      message_id: ""
+  
+  # Send initial media with "analyzing..." message
   - choose:
     # Static snapshot
     - conditions:
@@ -627,7 +611,12 @@ action:
         data:
           target: !input telegram_target
           file: "{{ snapshot_path }}"
-          caption: "{{ camera_name }}{{ time_suffix }} - analyzing..."
+          caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
+        response_variable: initial_message_response
+      
+      - variables:
+          initial_message_sent: true
+          message_id: "{{ initial_message_response.message_id if initial_message_response is defined else 'last' }}"
     
     # Frigate Clip (MP4)
     - conditions:
@@ -652,7 +641,12 @@ action:
             data:
               target: !input telegram_target
               file: "{{ clip_path }}"
-              caption: "{{ camera_name }}{{ time_suffix }} - analyzing..."
+              caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
+            response_variable: initial_message_response
+          
+          - variables:
+              initial_message_sent: true
+              message_id: "{{ initial_message_response.message_id if initial_message_response is defined else 'last' }}"
         default:
         - service: camera.snapshot
           target:
@@ -663,7 +657,12 @@ action:
           data:
             target: !input telegram_target
             file: "{{ snapshot_path }}"
-            caption: "{{ camera_name }}{{ time_suffix }} - analyzing... (clip unavailable)"
+            caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing... (clip unavailable)"
+          response_variable: initial_message_response
+        
+        - variables:
+            initial_message_sent: true
+            message_id: "{{ initial_message_response.message_id if initial_message_response is defined else 'last' }}"
     
     # Frigate GIF
     - conditions:
@@ -688,7 +687,12 @@ action:
             data:
               target: !input telegram_target
               file: "{{ gif_path }}"
-              caption: "{{ camera_name }}{{ time_suffix }} - analyzing..."
+              caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
+            response_variable: initial_message_response
+          
+          - variables:
+              initial_message_sent: true
+              message_id: "{{ initial_message_response.message_id if initial_message_response is defined else 'last' }}"
         default:
         - service: camera.snapshot
           target:
@@ -699,9 +703,14 @@ action:
           data:
             target: !input telegram_target
             file: "{{ snapshot_path }}"
-            caption: "{{ camera_name }}{{ time_suffix }} - analyzing... (GIF unavailable)"
+            caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing... (GIF unavailable)"
+          response_variable: initial_message_response
+        
+        - variables:
+            initial_message_sent: true
+            message_id: "{{ initial_message_response.message_id if initial_message_response is defined else 'last' }}"
 
-  # OPTIMIZED MULTI-MODEL FALLBACK WITH TOGGLEABLE DIAGNOSTICS
+  # PROGRESSIVE AI ANALYSIS WITH MESSAGE UPDATES
   - variables:
       analysis_success: false
       successful_model: ""
@@ -709,23 +718,7 @@ action:
       model_attempt: 0
       start_time: "{{ now().timestamp() }}"
 
-  # Diagnostic header (only if diagnostics enabled)
-  - if:
-    - condition: template
-      value_template: "{{ enable_diagnostics and detailed_error_logging }}"
-    then:
-    - service: telegram_bot.send_message
-      data:
-        target: !input telegram_target
-        message: |
-          🔬 DIAGNOSTIC START: {{ camera_name }} {{ time_suffix }}
-          Models to test: {{ primary_models | join(' → ') }}
-          {% if diagnostic_prompt_info %}
-          Prompt length: {{ enhanced_ai_prompt | length }} chars
-          Prompt preview: "{{ enhanced_ai_prompt[:100] }}..."
-          {% endif %}
-
-  # Try all primary models with CONDITIONAL diagnostics
+  # Try all primary models with progressive message updates
   - repeat:
       while:
         - condition: template
@@ -735,14 +728,16 @@ action:
           current_model: "{{ primary_models[model_attempt] }}"
           attempt_start_time: "{{ now().timestamp() }}"
       
+      # Update message to show current model being tried (if progress updates enabled)
       - if:
         - condition: template
-          value_template: "{{ model_attempt > 0 and show_fallback_notifications }}"
+          value_template: "{{ initial_message_sent and show_progress_updates and model_attempt > 0 }}"
         then:
-        - service: telegram_bot.send_message
+        - service: telegram_bot.edit_message
           data:
-            target: !input telegram_target
-            message: "🔄 {{ camera_name }} - {{ primary_models[model_attempt-1] }} failed, trying {{ current_model }}..."
+            chat_id: !input telegram_target
+            message_id: "{{ message_id }}"
+            message: "🔄 {{ camera_name }}{{ time_suffix }} - Trying {{ current_model }}..."
       
       # Try current model
       - service: llmvision.stream_analyzer
@@ -767,8 +762,6 @@ action:
           attempt_end_time: "{{ now().timestamp() }}"
           response_time: "{{ (attempt_end_time | float) - (attempt_start_time | float) }}"
           response_text: "{{ current_response.get('response_text', '') if current_response is defined else '' }}"
-          response_error: "{{ current_response.get('error', 'none') if current_response is defined else 'undefined_response' }}"
-          response_status: "{{ current_response.get('status', 'unknown') if current_response is defined else 'no_response' }}"
           is_valid: >
             {% set text = response_text %}
             {% if text == '' or 
@@ -782,27 +775,18 @@ action:
               true
             {% endif %}
       
-      # CONDITIONAL DIAGNOSTIC LOGGING (only if diagnostics enabled)
+      # DIAGNOSTIC LOGGING (separate messages if diagnostics enabled)
       - if:
         - condition: template
-          value_template: "{{ enable_diagnostics and detailed_error_logging and (not is_valid or log_successful_attempts) }}"
+          value_template: "{{ enable_diagnostics and detailed_error_logging and not is_valid }}"
         then:
         - service: telegram_bot.send_message
           data:
             target: !input telegram_target
             message: |
-              🔍 DIAGNOSTIC: {{ current_model }}
+              🔍 DIAGNOSTIC: {{ current_model }} failed
               ⏱️ Response time: {{ "%.2f"|format(response_time|float) }}s
-              ✅ Valid response: {{ is_valid }}
-              📊 Status: {{ response_status }}
-              ❌ Error: {{ response_error }}
-              {% if log_response_metadata and current_response is defined %}
-              📝 Full response object keys: {{ current_response.keys() | list | join(', ') }}
-              {% endif %}
-              💬 Response (first 200 chars): "{{ response_text[:200] }}{{ '...' if response_text|length > 200 else '' }}"
-              {% if not is_valid %}
-              🚨 FAILURE REASON: {% if response_text == '' %}Empty response{% elif 'Couldn\'t generate content' in response_text %}Content generation failed{% elif 'overloaded' in response_text %}Model overloaded{% elif 'API failed' in response_text %}API error{% else %}Unknown error{% endif %}
-              {% endif %}
+              ❌ Error: {{ response_text[:200] }}
 
       # Check if this model succeeded
       - if:
@@ -822,20 +806,22 @@ action:
     - condition: template
       value_template: "{{ not analysis_success and enable_secondary_provider and secondary_provider is not none and secondary_provider != '' }}"
     then:
+    # Update message to show secondary provider attempt
     - if:
       - condition: template
-        value_template: "{{ show_fallback_notifications }}"
+        value_template: "{{ initial_message_sent and show_progress_updates }}"
       then:
-      - service: telegram_bot.send_message
+      - service: telegram_bot.edit_message
         data:
-          target: !input telegram_target
-          message: "🆘 {{ camera_name }} - All primary models failed, trying secondary provider..."
+          chat_id: !input telegram_target
+          message_id: "{{ message_id }}"
+          message: "🆘 {{ camera_name }}{{ time_suffix }} - Trying secondary provider..."
     
     - variables:
         secondary_attempt: 0
         secondary_success: false
     
-    # Try secondary models with conditional diagnostics
+    # Try secondary models
     - repeat:
         while:
           - condition: template
@@ -843,7 +829,17 @@ action:
         sequence:
         - variables:
             current_secondary_model: "{{ secondary_models[secondary_attempt] }}"
-            secondary_start_time: "{{ now().timestamp() }}"
+        
+        # Update message for secondary model attempt
+        - if:
+          - condition: template
+            value_template: "{{ initial_message_sent and show_progress_updates }}"
+          then:
+          - service: telegram_bot.edit_message
+            data:
+              chat_id: !input telegram_target
+              message_id: "{{ message_id }}"
+              message: "🔄 {{ camera_name }}{{ time_suffix }} - Trying {{ current_secondary_model }}..."
         
         # Try current secondary model
         - service: llmvision.stream_analyzer
@@ -865,8 +861,6 @@ action:
           continue_on_error: true
         
         - variables:
-            secondary_end_time: "{{ now().timestamp() }}"
-            secondary_response_time: "{{ (secondary_end_time | float) - (secondary_start_time | float) }}"
             secondary_text: "{{ secondary_response.get('response_text', '') if secondary_response is defined else '' }}"
             secondary_valid: >
               {% set text = secondary_text %}
@@ -881,20 +875,6 @@ action:
                 true
               {% endif %}
         
-        # Conditional diagnostic logging for secondary
-        - if:
-          - condition: template
-            value_template: "{{ enable_diagnostics and detailed_error_logging }}"
-          then:
-          - service: telegram_bot.send_message
-            data:
-              target: !input telegram_target
-              message: |
-                🔍 SECONDARY DIAGNOSTIC: {{ current_secondary_model }}
-                ⏱️ Response time: {{ "%.2f"|format(secondary_response_time|float) }}s
-                ✅ Valid response: {{ secondary_valid }}
-                💬 Response: "{{ secondary_text[:150] }}{{ '...' if secondary_text|length > 150 else '' }}"
-        
         - if:
           - condition: template
             value_template: "{{ secondary_valid }}"
@@ -908,30 +888,26 @@ action:
           - variables:
               secondary_attempt: "{{ secondary_attempt + 1 }}"
 
-  # Conditional diagnostic summary
-  - if:
-    - condition: template
-      value_template: "{{ enable_diagnostics and detailed_error_logging }}"
-    then:
-    - variables:
-        total_time: "{{ (now().timestamp() | float) - (start_time | float) }}"
-    - service: telegram_bot.send_message
-      data:
-        target: !input telegram_target
-        message: |
-          🔬 DIAGNOSTIC SUMMARY: {{ camera_name }}
-          ⏱️ Total analysis time: {{ "%.2f"|format(total_time|float) }}s
-          🎯 Successful model: {{ successful_model if analysis_success else "NONE" }}
-          📊 Models tested: {{ model_attempt + 1 }}/{{ primary_models | length }} primary
-          {% if enable_secondary_provider and not analysis_success %}+ {{ secondary_attempt }}/{{ secondary_models | length }} secondary{% endif %}
-          ✅ Final result: {{ "SUCCESS" if analysis_success else "ALL FAILED" }}
-
-  # SEND SUCCESSFUL ANALYSIS RESULT OR FINAL FALLBACK
+  # FINAL MESSAGE UPDATE WITH RESULT
   - choose:
-    # Success - At least one model worked
+    # Success - Update message with AI result
     - conditions:
       - condition: template
-        value_template: "{{ analysis_success }}"
+        value_template: "{{ analysis_success and initial_message_sent }}"
+      sequence:
+      - service: telegram_bot.edit_message
+        data:
+          chat_id: !input telegram_target
+          message_id: "{{ message_id }}"
+          message: >
+            {{ analysis_result }}{% if show_model_usage %}
+
+            ({{ successful_model }}){% endif %}
+    
+    # Success but no initial message - send new message
+    - conditions:
+      - condition: template
+        value_template: "{{ analysis_success and not initial_message_sent }}"
       sequence:
       - service: telegram_bot.send_message
         data:
@@ -939,49 +915,86 @@ action:
           message: >
             {{ analysis_result }}{% if show_model_usage %} ({{ successful_model }}){% endif %}
     
-    # ALL MODELS FAILED - Use final fallback
+    # ALL MODELS FAILED - Update with fallback or send fallback message
     default:
-    - if:
-      - condition: template
-        value_template: "{{ enable_final_fallback }}"
-      then:
+    - choose:
+      # Update existing message with fallback
+      - conditions:
+        - condition: template
+          value_template: "{{ initial_message_sent and enable_final_fallback }}"
+        sequence:
+        - choose:
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'simple_notification' }}"
+            sequence:
+            - service: telegram_bot.edit_message
+              data:
+                chat_id: !input telegram_target
+                message_id: "{{ message_id }}"
+                message: "{{ camera_name }} motion detected (All AI unavailable)"
+          
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'time_based' }}"
+            sequence:
+            - service: telegram_bot.edit_message
+              data:
+                chat_id: !input telegram_target
+                message_id: "{{ message_id }}"
+                message: "{{ time_based_message }} (All AI unavailable)"
+          
+          # Silent mode - update with minimal message
+          default:
+          - service: telegram_bot.edit_message
+            data:
+              chat_id: !input telegram_target
+              message_id: "{{ message_id }}"
+              message: "{{ camera_name }}{{ time_suffix }} - Motion detected"
+      
+      # No initial message - send fallback message
+      - conditions:
+        - condition: template
+          value_template: "{{ not initial_message_sent and enable_final_fallback }}"
+        then:
+        - choose:
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'simple_notification' }}"
+            sequence:
+            - service: telegram_bot.send_message
+              data:
+                target: !input telegram_target
+                message: "{{ camera_name }} motion detected (All AI unavailable)"
+          
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'time_based' }}"
+            sequence:
+            - service: telegram_bot.send_message
+              data:
+                target: !input telegram_target
+                message: "{{ time_based_message }} (All AI unavailable)"
+          
+          # Silent mode - do nothing
+          default: []
+      
+      # No fallback enabled - update with error message
+      default:
       - if:
         - condition: template
-          value_template: "{{ show_api_errors }}"
+          value_template: "{{ initial_message_sent }}"
         then:
+        - service: telegram_bot.edit_message
+          data:
+            chat_id: !input telegram_target
+            message_id: "{{ message_id }}"
+            message: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
+        else:
         - service: telegram_bot.send_message
           data:
             target: !input telegram_target
-            message: "🚨 {{ camera_name }}{{ time_suffix }} - All AI models failed - using basic fallback"
-      
-      # Send fallback notification based on mode
-      - choose:
-        - conditions:
-          - condition: template
-            value_template: "{{ fallback_mode == 'simple_notification' }}"
-          sequence:
-          - service: telegram_bot.send_message
-            data:
-              target: !input telegram_target
-              message: "{{ camera_name }} motion detected (All AI unavailable)"
-        
-        - conditions:
-          - condition: template
-            value_template: "{{ fallback_mode == 'time_based' }}"
-          sequence:
-          - service: telegram_bot.send_message
-            data:
-              target: !input telegram_target
-              message: "{{ time_based_message }} (All AI unavailable)"
-        
-        # Silent mode - do nothing
-        default: []
-      else:
-      # No final fallback enabled
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
+            message: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
 
 # Automation cooldown delay (using minutes)
 - if:
