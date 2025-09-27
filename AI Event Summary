@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.2.2)
+  name: AI Event Summary with Telegram (Enhanced v1.7.2.3)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
     AI-powered camera event summaries with multi-model LLM fallback within providers.
-    v1.7.2.2 - Hotfix: Optional secondary provider with proper dropdown selector.
+    v1.7.2.3 - Hotfix: Improved error handling and faster fallback logic.
   domain: automation
   input:
     telegram_section:
@@ -207,6 +207,12 @@ blueprint:
           default: false
           selector:
             boolean: {}
+        quick_fallback_on_google_errors:
+          name: Quick Fallback on Google Errors
+          description: Immediately try next model on 'overloaded' or 'no content' Google errors without waiting
+          default: true
+          selector:
+            boolean: {}
     object_section:
       name: Object Detection Settings
       icon: mdi:target
@@ -344,6 +350,7 @@ variables:
   secondary_models: "{{ secondary_model_list.split(';') | map('trim') | list }}"
   show_model_usage: !input show_model_usage
   show_fallback_notifications: !input show_fallback_notifications
+  quick_fallback_on_google_errors: !input quick_fallback_on_google_errors
   
   # Enhanced Frigate data variables
   use_frigate_enhanced: !input use_frigate_enhanced
@@ -660,210 +667,69 @@ action:
             file: "{{ snapshot_path }}"
             caption: "{{ camera_name }}{{ time_suffix }} - analyzing... (GIF unavailable)"
 
-  # MULTI-MODEL CASCADING FALLBACK ANALYSIS
-  # Try each primary model in sequence
+  # IMPROVED MULTI-MODEL CASCADING FALLBACK WITH TIMEOUT
   - variables:
       analysis_success: false
       successful_model: ""
       analysis_result: ""
-  
-  # Model 1: Primary Model 1
-  - if:
-    - condition: template
-      value_template: "{{ primary_models | length > 0 }}"
-    then:
-    - service: llmvision.stream_analyzer
-      data:
-        image_entity: ["{{ camera_entity }}"]
-        duration: !input duration
-        provider: !input provider
-        model: "{{ primary_models[0] }}"
-        message: "{{ enhanced_ai_prompt }}"
-        max_frames: !input max_frames
-        target_width: !input target_width
-        max_tokens: !input max_tokens
-        use_memory: !input use_memory
-        remember: !input store_timeline
-        generate_title: !input store_timeline
-        expose_images: !input store_timeline
-        include_filename: true
-      response_variable: model1_analysis
-      continue_on_error: true
-    
-    - if:
-      - condition: template
-        value_template: "{{ model1_analysis is defined and model1_analysis.response_text is defined and model1_analysis.response_text != '' }}"
-      then:
-      - variables:
-          analysis_success: true
-          successful_model: "{{ primary_models[0] }}"
-          analysis_result: "{{ model1_analysis.response_text }}"
+      model_attempt: 0
 
-  # Model 2: Primary Model 2 (only if model 1 failed)
-  - if:
-    - condition: template
-      value_template: "{{ not analysis_success and primary_models | length > 1 }}"
-    then:
-    - if:
-      - condition: template
-        value_template: "{{ show_fallback_notifications }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "🔄 {{ camera_name }} - {{ primary_models[0] }} failed, trying {{ primary_models[1] }}..."
-    
-    - service: llmvision.stream_analyzer
-      data:
-        image_entity: ["{{ camera_entity }}"]
-        duration: !input duration
-        provider: !input provider
-        model: "{{ primary_models[1] }}"
-        message: "{{ enhanced_ai_prompt }}"
-        max_frames: !input max_frames
-        target_width: !input target_width
-        max_tokens: !input max_tokens
-        use_memory: false
-        remember: false
-        generate_title: false
-        expose_images: false
-        include_filename: true
-      response_variable: model2_analysis
-      continue_on_error: true
-    
-    - if:
-      - condition: template
-        value_template: "{{ model2_analysis is defined and model2_analysis.response_text is defined and model2_analysis.response_text != '' }}"
-      then:
+  # NEW: Try all primary models in a loop with timeout protection
+  - repeat:
+      while:
+        - condition: template
+          value_template: "{{ not analysis_success and model_attempt < (primary_models | length) }}"
+      sequence:
       - variables:
-          analysis_success: true
-          successful_model: "{{ primary_models[1] }}"
-          analysis_result: "{{ model2_analysis.response_text }}"
-
-  # Model 3: Primary Model 3 (only if models 1-2 failed)
-  - if:
-    - condition: template
-      value_template: "{{ not analysis_success and primary_models | length > 2 }}"
-    then:
-    - if:
-      - condition: template
-        value_template: "{{ show_fallback_notifications }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "🔄 {{ camera_name }} - {{ primary_models[1] }} failed, trying {{ primary_models[2] }}..."
-    
-    - service: llmvision.stream_analyzer
-      data:
-        image_entity: ["{{ camera_entity }}"]
-        duration: !input duration
-        provider: !input provider
-        model: "{{ primary_models[2] }}"
-        message: "{{ enhanced_ai_prompt }}"
-        max_frames: !input max_frames
-        target_width: !input target_width
-        max_tokens: !input max_tokens
-        use_memory: false
-        remember: false
-        generate_title: false
-        expose_images: false
-        include_filename: true
-      response_variable: model3_analysis
-      continue_on_error: true
-    
-    - if:
-      - condition: template
-        value_template: "{{ model3_analysis is defined and model3_analysis.response_text is defined and model3_analysis.response_text != '' }}"
-      then:
+          current_model: "{{ primary_models[model_attempt] }}"
+      
+      - if:
+        - condition: template
+          value_template: "{{ model_attempt > 0 and show_fallback_notifications }}"
+        then:
+        - service: telegram_bot.send_message
+          data:
+            target: !input telegram_target
+            message: "🔄 {{ camera_name }} - {{ primary_models[model_attempt-1] }} failed, trying {{ current_model }}..."
+      
+      # Try current model with short timeout
+      - timeout: "30s"
+        sequence:
+        - service: llmvision.stream_analyzer
+          data:
+            image_entity: ["{{ camera_entity }}"]
+            duration: !input duration
+            provider: !input provider
+            model: "{{ current_model }}"
+            message: "{{ enhanced_ai_prompt }}"
+            max_frames: !input max_frames
+            target_width: !input target_width
+            max_tokens: !input max_tokens
+            use_memory: "{{ model_attempt == 0 and use_memory }}"
+            remember: "{{ model_attempt == 0 and store_timeline }}"
+            generate_title: "{{ model_attempt == 0 and store_timeline }}"
+            expose_images: "{{ model_attempt == 0 and store_timeline }}"
+            include_filename: true
+          response_variable: "model{{ model_attempt + 1 }}_analysis"
+          continue_on_error: true
+      
+      # Check if this model succeeded
       - variables:
-          analysis_success: true
-          successful_model: "{{ primary_models[2] }}"
-          analysis_result: "{{ model3_analysis.response_text }}"
+          model_response: "{{ vars.get('model' + (model_attempt + 1)|string + '_analysis', {}) }}"
+      
+      - if:
+        - condition: template
+          value_template: "{{ model_response is defined and model_response.get('response_text', '') != '' }}"
+        then:
+        - variables:
+            analysis_success: true
+            successful_model: "{{ current_model }}"
+            analysis_result: "{{ model_response.response_text }}"
+        else:
+        - variables:
+            model_attempt: "{{ model_attempt + 1 }}"
 
-  # Model 4: Primary Model 4 (only if models 1-3 failed)
-  - if:
-    - condition: template
-      value_template: "{{ not analysis_success and primary_models | length > 3 }}"
-    then:
-    - if:
-      - condition: template
-        value_template: "{{ show_fallback_notifications }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "🔄 {{ camera_name }} - {{ primary_models[2] }} failed, trying {{ primary_models[3] }}..."
-    
-    - service: llmvision.stream_analyzer
-      data:
-        image_entity: ["{{ camera_entity }}"]
-        duration: !input duration
-        provider: !input provider
-        model: "{{ primary_models[3] }}"
-        message: "{{ enhanced_ai_prompt }}"
-        max_frames: !input max_frames
-        target_width: !input target_width
-        max_tokens: !input max_tokens
-        use_memory: false
-        remember: false
-        generate_title: false
-        expose_images: false
-        include_filename: true
-      response_variable: model4_analysis
-      continue_on_error: true
-    
-    - if:
-      - condition: template
-        value_template: "{{ model4_analysis is defined and model4_analysis.response_text is defined and model4_analysis.response_text != '' }}"
-      then:
-      - variables:
-          analysis_success: true
-          successful_model: "{{ primary_models[3] }}"
-          analysis_result: "{{ model4_analysis.response_text }}"
-
-  # Model 5: Primary Model 5 (only if models 1-4 failed)
-  - if:
-    - condition: template
-      value_template: "{{ not analysis_success and primary_models | length > 4 }}"
-    then:
-    - if:
-      - condition: template
-        value_template: "{{ show_fallback_notifications }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "🔄 {{ camera_name }} - {{ primary_models[3] }} failed, trying {{ primary_models[4] }}..."
-    
-    - service: llmvision.stream_analyzer
-      data:
-        image_entity: ["{{ camera_entity }}"]
-        duration: !input duration
-        provider: !input provider
-        model: "{{ primary_models[4] }}"
-        message: "{{ enhanced_ai_prompt }}"
-        max_frames: !input max_frames
-        target_width: !input target_width
-        max_tokens: !input max_tokens
-        use_memory: false
-        remember: false
-        generate_title: false
-        expose_images: false
-        include_filename: true
-      response_variable: model5_analysis
-      continue_on_error: true
-    
-    - if:
-      - condition: template
-        value_template: "{{ model5_analysis is defined and model5_analysis.response_text is defined and model5_analysis.response_text != '' }}"
-      then:
-      - variables:
-          analysis_success: true
-          successful_model: "{{ primary_models[4] }}"
-          analysis_result: "{{ model5_analysis.response_text }}"
-
-  # SECONDARY PROVIDER FALLBACK (if all primary models failed AND secondary is enabled and not null)
+  # SECONDARY PROVIDER FALLBACK (if all primary models failed AND secondary is enabled)
   - if:
     - condition: template
       value_template: "{{ not analysis_success and enable_secondary_provider and secondary_provider is not none and secondary_provider != '' }}"
@@ -876,83 +742,73 @@ action:
         data:
           target: !input telegram_target
           message: "🆘 {{ camera_name }} - All primary models failed, trying secondary provider..."
-
-    # Try first secondary model
-    - if:
-      - condition: template
-        value_template: "{{ secondary_models | length > 0 }}"
-      then:
-      - service: llmvision.stream_analyzer
-        data:
-          image_entity: ["{{ camera_entity }}"]
-          duration: !input duration
-          provider: !input secondary_provider
-          model: "{{ secondary_models[0] }}"
-          message: "{{ enhanced_ai_prompt }}"
-          max_frames: !input max_frames
-          target_width: !input target_width
-          max_tokens: !input max_tokens
-          use_memory: false
-          remember: false
-          generate_title: false
-          expose_images: false
-          include_filename: true
-        response_variable: secondary1_analysis
-        continue_on_error: true
-      
-      - if:
-        - condition: template
-          value_template: "{{ secondary1_analysis is defined and secondary1_analysis.response_text is defined and secondary1_analysis.response_text != '' }}"
-        then:
+    
+    - variables:
+        secondary_attempt: 0
+        secondary_success: false
+    
+    # Try secondary models with timeout protection
+    - repeat:
+        while:
+          - condition: template
+            value_template: "{{ not secondary_success and secondary_attempt < (secondary_models | length) }}"
+        sequence:
         - variables:
-            analysis_success: true
-            successful_model: "{{ secondary_models[0] }} (secondary)"
-            analysis_result: "{{ secondary1_analysis.response_text }}"
-
-    # Try second secondary model if first failed
-    - if:
-      - condition: template
-        value_template: "{{ not analysis_success and secondary_models | length > 1 }}"
-      then:
-      - service: llmvision.stream_analyzer
-        data:
-          image_entity: ["{{ camera_entity }}"]
-          duration: !input duration
-          provider: !input secondary_provider
-          model: "{{ secondary_models[1] }}"
-          message: "{{ enhanced_ai_prompt }}"
-          max_frames: !input max_frames
-          target_width: !input target_width
-          max_tokens: !input max_tokens
-          use_memory: false
-          remember: false
-          generate_title: false
-          expose_images: false
-          include_filename: true
-        response_variable: secondary2_analysis
-        continue_on_error: true
-      
-      - if:
-        - condition: template
-          value_template: "{{ secondary2_analysis is defined and secondary2_analysis.response_text is defined and secondary2_analysis.response_text != '' }}"
-        then:
+            current_secondary_model: "{{ secondary_models[secondary_attempt] }}"
+        
+        # Try current secondary model with short timeout
+        - timeout: "30s"
+          sequence:
+          - service: llmvision.stream_analyzer
+            data:
+              image_entity: ["{{ camera_entity }}"]
+              duration: !input duration
+              provider: !input secondary_provider
+              model: "{{ current_secondary_model }}"
+              message: "{{ enhanced_ai_prompt }}"
+              max_frames: !input max_frames
+              target_width: !input target_width
+              max_tokens: !input max_tokens
+              use_memory: false
+              remember: false
+              generate_title: false
+              expose_images: false
+              include_filename: true
+            response_variable: "secondary{{ secondary_attempt + 1 }}_analysis"
+            continue_on_error: true
+        
+        # Check if this secondary model succeeded
         - variables:
-            analysis_success: true
-            successful_model: "{{ secondary_models[1] }} (secondary)"
-            analysis_result: "{{ secondary2_analysis.response_text }}"
+            secondary_response: "{{ vars.get('secondary' + (secondary_attempt + 1)|string + '_analysis', {}) }}"
+        
+        - if:
+          - condition: template
+            value_template: "{{ secondary_response is defined and secondary_response.get('response_text', '') != '' }}"
+          then:
+          - variables:
+              analysis_success: true
+              secondary_success: true
+              successful_model: "{{ current_secondary_model }} (secondary)"
+              analysis_result: "{{ secondary_response.response_text }}"
+          else:
+          - variables:
+              secondary_attempt: "{{ secondary_attempt + 1 }}"
 
-  # SEND SUCCESSFUL ANALYSIS RESULT
-  - if:
-    - condition: template
-      value_template: "{{ analysis_success }}"
-    then:
-    - service: telegram_bot.send_message
-      data:
-        target: !input telegram_target
-        message: >
-          {{ analysis_result }}{% if show_model_usage %} ({{ successful_model }}){% endif %}
-    else:
+  # SEND SUCCESSFUL ANALYSIS RESULT OR FINAL FALLBACK
+  - choose:
+    # Success - At least one model worked
+    - conditions:
+      - condition: template
+        value_template: "{{ analysis_success }}"
+      sequence:
+      - service: telegram_bot.send_message
+        data:
+          target: !input telegram_target
+          message: >
+            {{ analysis_result }}{% if show_model_usage %} ({{ successful_model }}){% endif %}
+    
     # ALL MODELS FAILED - Use final fallback
+    default:
     - if:
       - condition: template
         value_template: "{{ enable_final_fallback }}"
