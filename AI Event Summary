@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.4.3)
+  name: AI Event Summary with Telegram (Enhanced v1.7.4.4)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
     AI-powered camera event summaries with progressive message updates in Telegram.
-    v1.7.4.3 - Debug: Enhanced message_id detection and debug logging for progressive updates.
+    v1.7.4.4 - Fixed: Correct message_id extraction from nested telegram response structure.
   domain: automation
   input:
     telegram_section:
@@ -70,7 +70,7 @@ blueprint:
         debug_message_updates:
           name: Debug Message Updates
           description: Send debug info about message_id and update attempts (temporary troubleshooting)
-          default: true
+          default: false
           selector:
             boolean: {}
     camera_section:
@@ -621,7 +621,12 @@ action:
           caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
         response_variable: initial_message_response
       
-      # Debug: Log the response structure
+      # FIXED: Extract message_id from nested structure
+      - variables:
+          initial_message_sent: "{{ initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 }}"
+          message_id: "{{ initial_message_response.chats[0].message_id | int if initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 else 0 }}"
+      
+      # Debug: Log the fixed message_id extraction
       - if:
         - condition: template
           value_template: "{{ debug_message_updates }}"
@@ -630,15 +635,10 @@ action:
           data:
             target: !input telegram_target
             message: |
-              🐛 DEBUG: Initial message response
-              Response defined: {{ initial_message_response is defined }}
-              Response keys: {{ initial_message_response.keys() | list if initial_message_response is defined else 'undefined' }}
-              Message ID: {{ initial_message_response.get('message_id', 'not_found') if initial_message_response is defined else 'undefined' }}
-              Full response: {{ initial_message_response if initial_message_response is defined else 'undefined' }}
-      
-      - variables:
-          initial_message_sent: "{{ initial_message_response is defined and initial_message_response.get('message_id') is defined }}"
-          message_id: "{{ initial_message_response.get('message_id', 0) | int if initial_message_response is defined else 0 }}"
+              🐛 DEBUG: Fixed message_id extraction
+              Chats array: {{ initial_message_response.chats if initial_message_response is defined else 'undefined' }}
+              Message ID: {{ message_id }}
+              Will attempt updates: {{ initial_message_sent and message_id > 0 }}
     
     # Frigate Clip (MP4)
     - conditions:
@@ -666,23 +666,10 @@ action:
               caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
             response_variable: initial_message_response
           
-          # Debug: Log the response structure
-          - if:
-            - condition: template
-              value_template: "{{ debug_message_updates }}"
-            then:
-            - service: telegram_bot.send_message
-              data:
-                target: !input telegram_target
-                message: |
-                  🐛 DEBUG: Initial video message response
-                  Response defined: {{ initial_message_response is defined }}
-                  Response keys: {{ initial_message_response.keys() | list if initial_message_response is defined else 'undefined' }}
-                  Message ID: {{ initial_message_response.get('message_id', 'not_found') if initial_message_response is defined else 'undefined' }}
-          
+          # FIXED: Extract message_id from nested structure
           - variables:
-              initial_message_sent: "{{ initial_message_response is defined and initial_message_response.get('message_id') is defined }}"
-              message_id: "{{ initial_message_response.get('message_id', 0) | int if initial_message_response is defined else 0 }}"
+              initial_message_sent: "{{ initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 }}"
+              message_id: "{{ initial_message_response.chats[0].message_id | int if initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 else 0 }}"
         default:
         - service: camera.snapshot
           target:
@@ -696,9 +683,10 @@ action:
             caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing... (clip unavailable)"
           response_variable: initial_message_response
         
+        # FIXED: Extract message_id from nested structure
         - variables:
-            initial_message_sent: "{{ initial_message_response is defined and initial_message_response.get('message_id') is defined }}"
-            message_id: "{{ initial_message_response.get('message_id', 0) | int if initial_message_response is defined else 0 }}"
+            initial_message_sent: "{{ initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 }}"
+            message_id: "{{ initial_message_response.chats[0].message_id | int if initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 else 0 }}"
     
     # Frigate GIF
     - conditions:
@@ -726,9 +714,10 @@ action:
               caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
             response_variable: initial_message_response
           
+          # FIXED: Extract message_id from nested structure
           - variables:
-              initial_message_sent: "{{ initial_message_response is defined and initial_message_response.get('message_id') is defined }}"
-              message_id: "{{ initial_message_response.get('message_id', 0) | int if initial_message_response is defined else 0 }}"
+              initial_message_sent: "{{ initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 }}"
+              message_id: "{{ initial_message_response.chats[0].message_id | int if initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 else 0 }}"
         default:
         - service: camera.snapshot
           target:
@@ -742,23 +731,10 @@ action:
             caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing... (GIF unavailable)"
           response_variable: initial_message_response
         
+        # FIXED: Extract message_id from nested structure
         - variables:
-            initial_message_sent: "{{ initial_message_response is defined and initial_message_response.get('message_id') is defined }}"
-            message_id: "{{ initial_message_response.get('message_id', 0) | int if initial_message_response is defined else 0 }}"
-
-  # Debug: Log final message_id status
-  - if:
-    - condition: template
-      value_template: "{{ debug_message_updates }}"
-    then:
-    - service: telegram_bot.send_message
-      data:
-        target: !input telegram_target
-        message: |
-          🐛 DEBUG: Final message setup
-          Initial message sent: {{ initial_message_sent }}
-          Message ID: {{ message_id }}
-          Will attempt updates: {{ initial_message_sent and message_id > 0 }}
+            initial_message_sent: "{{ initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 }}"
+            message_id: "{{ initial_message_response.chats[0].message_id | int if initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 else 0 }}"
 
   # PROGRESSIVE AI ANALYSIS WITH MESSAGE UPDATES
   - variables:
@@ -941,21 +917,6 @@ action:
           - variables:
               secondary_attempt: "{{ secondary_attempt + 1 }}"
 
-  # Debug: Show final update attempt info
-  - if:
-    - condition: template
-      value_template: "{{ debug_message_updates }}"
-    then:
-    - service: telegram_bot.send_message
-      data:
-        target: !input telegram_target
-        message: |
-          🐛 DEBUG: Final update attempt
-          Analysis success: {{ analysis_success }}
-          Initial message sent: {{ initial_message_sent }}
-          Message ID: {{ message_id }}
-          Will attempt edit: {{ analysis_success and initial_message_sent and message_id > 0 }}
-
   # FINAL MESSAGE UPDATE WITH RESULT
   - choose:
     # Success - Update message with AI result (only if message_id is valid)
@@ -981,7 +942,7 @@ action:
         - service: telegram_bot.send_message
           data:
             target: !input telegram_target
-            message: "🐛 DEBUG: Attempted to edit message {{ message_id }} with final result"
+            message: "🐛 DEBUG: Successfully edited message {{ message_id }} with final result"
     
     # Success but no valid message_id - send new message
     - conditions:
