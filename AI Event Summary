@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.5)
+  name: AI Event Summary with Telegram (Enhanced v1.7.5.1)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI-powered camera event summaries with inline keyboard media switching.
-    v1.7.5 - Interactive Media: Add buttons to switch between photo/GIF/MP4 in same message.
+    AI-powered camera event summaries using Frigate's annotated snapshots with object boxes.
+    v1.7.5.1 - Frigate Annotations: Use Frigate's built-in bounding box snapshots instead of plain images.
   domain: automation
   input:
     telegram_section:
@@ -106,6 +106,49 @@ blueprint:
               min: 1
               max: 30
               step: 1
+    snapshot_section:
+      name: Snapshot Settings
+      icon: mdi:camera-enhance
+      input:
+        use_frigate_snapshots:
+          name: Use Frigate Annotated Snapshots
+          description: Use Frigate's pre-generated snapshots with bounding boxes instead of plain camera snapshots
+          default: true
+          selector:
+            boolean: {}
+        fallback_to_camera:
+          name: Fallback to Camera Snapshots
+          description: Use plain camera snapshots if Frigate annotated snapshots fail
+          default: true
+          selector:
+            boolean: {}
+        include_bounding_boxes:
+          name: Include Bounding Boxes
+          description: Add detection bounding boxes to Frigate snapshots (only for Frigate events)
+          default: true
+          selector:
+            boolean: {}
+        include_timestamp:
+          name: Include Timestamp
+          description: Add timestamp overlay to Frigate snapshots
+          default: false
+          selector:
+            boolean: {}
+        crop_to_objects:
+          name: Crop to Objects  
+          description: Crop snapshot to detected objects area (only for Frigate events)
+          default: false
+          selector:
+            boolean: {}
+        snapshot_height:
+          name: Snapshot Height (pixels)
+          description: Resize snapshot height (leave 0 for original size)
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 2160
+              step: 60
     ai_section:
       name: Primary AI Settings
       icon: mdi:brain
@@ -352,6 +395,14 @@ variables:
   debug_message_updates: !input debug_message_updates
   media_switching: !input media_switching
   
+  # NEW: Frigate snapshot settings
+  use_frigate_snapshots: !input use_frigate_snapshots
+  fallback_to_camera: !input fallback_to_camera
+  include_bounding_boxes: !input include_bounding_boxes
+  include_timestamp: !input include_timestamp
+  crop_to_objects: !input crop_to_objects
+  snapshot_height: !input snapshot_height
+  
   # Multi-model fallback variables
   model_list: !input model_list
   primary_models: "{{ model_list.split(';') | map('trim') | list }}"
@@ -395,6 +446,8 @@ variables:
   
   camera_name: '{{ camera_entity.replace("camera.", "").replace("_", " ").title() }}'
   frigate_camera_name: '{{ camera_entity.replace("camera.", "") }}'
+  
+  # Standard camera snapshot path (fallback)
   snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_snapshot.jpg'
   
   # Extract enhanced Frigate event data - SAFE VERSION
@@ -428,6 +481,34 @@ variables:
     {% else %}
       []
     {% endif %}
+  
+  # NEW: Build Frigate snapshot URL with parameters
+  frigate_snapshot_params: >
+    {% set params = [] %}
+    {% if include_bounding_boxes and has_real_frigate_event %}
+      {% set params = params + ['bbox=1'] %}
+    {% endif %}
+    {% if include_timestamp %}
+      {% set params = params + ['timestamp=1'] %}
+    {% endif %}
+    {% if crop_to_objects and has_real_frigate_event %}
+      {% set params = params + ['crop=1'] %}
+    {% endif %}
+    {% if snapshot_height > 0 %}
+      {% set params = params + ['h=' + snapshot_height|string] %}
+    {% endif %}
+    {{ '?' + params|join('&') if params else '' }}
+  
+  # NEW: Frigate annotated snapshot URLs
+  frigate_event_snapshot_url: >
+    {% if has_real_frigate_event %}
+      {{ frigate_base_url }}/api/events/{{ event_id }}/snapshot.jpg{{ frigate_snapshot_params }}
+    {% else %}
+      {{ frigate_base_url }}/api/{{ frigate_camera_name }}/latest.jpg{{ frigate_snapshot_params }}
+    {% endif %}
+  
+  # Local file path for downloaded Frigate snapshot
+  frigate_snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_frigate_{{ event_id }}.jpg'
   
   # FIXED: Safe Frigate context generation - only if enabled and data exists
   frigate_context: >
@@ -523,13 +604,13 @@ trigger:
   entity_id: !input motion_sensors
   to: "on"
   id: motion_trigger
-# NEW: Listen for inline keyboard button presses
+# Listen for inline keyboard button presses
 - platform: event
   event_type: telegram_callback
   id: media_switch
 
 action:
-# NEW: Handle media switching button presses
+# Handle media switching button presses
 - choose:
   - conditions:
     - condition: template
@@ -558,32 +639,96 @@ action:
     
     # Switch media based on button pressed
     - choose:
-      # Switch to Photo
+      # Switch to Photo (with or without bounding boxes based on settings)
       - conditions:
         - condition: template
           value_template: "{{ callback_media_type == 'photo' }}"
         sequence:
-        # Find camera entity for this event (simplified - use first camera)
-        - variables:
-            switch_camera_entity: "{{ camera_entities[0] }}"
-            switch_frigate_camera_name: "{{ camera_entities[0].replace('camera.', '') }}"
-            switch_snapshot_path: '/config/www/snapshots/{{ switch_frigate_camera_name }}_switch_snapshot.jpg'
-        
-        - service: camera.snapshot
-          target:
-            entity_id: "{{ switch_camera_entity }}"
-          data:
-            filename: "{{ switch_snapshot_path }}"
-        
-        - service: telegram_bot.edit_media
-          data:
-            chat_id: "{{ callback_chat_id }}"
-            message_id: "{{ callback_message_id }}"
-            media:
-              type: photo
-              media: "{{ switch_snapshot_path }}"
-            inline_keyboard: !input media_switching and inline_keyboard_buttons
-          continue_on_error: true
+        # Try Frigate annotated snapshot first
+        - if:
+          - condition: template
+            value_template: "{{ use_frigate_snapshots }}"
+          then:
+          # Build URL for this specific event
+          - variables:
+              switch_frigate_url: >
+                {% if callback_event_id != 'manual' %}
+                  {{ frigate_base_url }}/api/events/{{ callback_event_id }}/snapshot.jpg{{ frigate_snapshot_params }}
+                {% else %}
+                  {{ frigate_base_url }}/api/{{ frigate_camera_name }}/latest.jpg{{ frigate_snapshot_params }}
+                {% endif %}
+              switch_frigate_path: '/config/www/snapshots/{{ frigate_camera_name }}_switch_frigate.jpg'
+          
+          - service: downloader.download_file
+            data:
+              url: "{{ switch_frigate_url }}"
+              filename: "{{ switch_frigate_path }}"
+            continue_on_error: true
+          
+          - delay:
+              seconds: 1
+          
+          # Check if Frigate snapshot download succeeded
+          - choose:
+            - conditions:
+              - condition: template
+                value_template: "{{ states('sensor.file_exists') == 'on' }}"
+              sequence:
+              - service: telegram_bot.edit_media
+                data:
+                  chat_id: "{{ callback_chat_id }}"
+                  message_id: "{{ callback_message_id }}"
+                  media:
+                    type: photo
+                    media: "{{ switch_frigate_path }}"
+                  inline_keyboard: "{{ inline_keyboard_buttons }}"
+                continue_on_error: true
+            # Fallback to camera snapshot if enabled
+            default:
+            - if:
+              - condition: template
+                value_template: "{{ fallback_to_camera }}"
+              then:
+              - variables:
+                  switch_camera_entity: "{{ camera_entities[0] }}"
+                  switch_snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_switch_camera.jpg'
+              
+              - service: camera.snapshot
+                target:
+                  entity_id: "{{ switch_camera_entity }}"
+                data:
+                  filename: "{{ switch_snapshot_path }}"
+              
+              - service: telegram_bot.edit_media
+                data:
+                  chat_id: "{{ callback_chat_id }}"
+                  message_id: "{{ callback_message_id }}"
+                  media:
+                    type: photo
+                    media: "{{ switch_snapshot_path }}"
+                  inline_keyboard: "{{ inline_keyboard_buttons }}"
+                continue_on_error: true
+          else:
+          # Use camera snapshot directly
+          - variables:
+              switch_camera_entity: "{{ camera_entities[0] }}"
+              switch_snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_switch_camera.jpg'
+          
+          - service: camera.snapshot
+            target:
+              entity_id: "{{ switch_camera_entity }}"
+            data:
+              filename: "{{ switch_snapshot_path }}"
+          
+          - service: telegram_bot.edit_media
+            data:
+              chat_id: "{{ callback_chat_id }}"
+              message_id: "{{ callback_message_id }}"
+              media:
+                type: photo
+                media: "{{ switch_snapshot_path }}"
+              inline_keyboard: "{{ inline_keyboard_buttons }}"
+            continue_on_error: true
       
       # Switch to GIF
       - conditions:
@@ -610,7 +755,7 @@ action:
             media:
               type: animation
               media: "{{ switch_gif_path }}"
-            inline_keyboard: !input media_switching and inline_keyboard_buttons
+            inline_keyboard: "{{ inline_keyboard_buttons }}"
           continue_on_error: true
       
       # Switch to MP4
@@ -638,7 +783,7 @@ action:
             media:
               type: video
               media: "{{ switch_mp4_path }}"
-            inline_keyboard: !input media_switching and inline_keyboard_buttons
+            inline_keyboard: "{{ inline_keyboard_buttons }}"
           continue_on_error: true
     
     - stop: "Media switching completed"
@@ -709,33 +854,93 @@ action:
     value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}"
   then:
   
-  # NEW: Always send initial photo instantly with inline keyboard
+  # NEW: Try Frigate annotated snapshot first, fallback to camera snapshot
   - variables:
       initial_message_sent: false
       message_id: 0
+      snapshot_success: false
   
-  # Take snapshot immediately for instant response
-  - service: camera.snapshot
-    target:
-      entity_id: "{{ camera_entity }}"
-    data:
-      filename: "{{ snapshot_path }}"
+  # Try Frigate annotated snapshot first (if enabled)
+  - if:
+    - condition: template
+      value_template: "{{ use_frigate_snapshots }}"
+    then:
+    - service: downloader.download_file
+      data:
+        url: "{{ frigate_event_snapshot_url }}"
+        filename: "{{ frigate_snapshot_path }}"
+      continue_on_error: true
+    
+    - delay:
+        seconds: 1
+    
+    # Check if Frigate snapshot download succeeded
+    - choose:
+      - conditions:
+        - condition: template
+          value_template: "{{ states('sensor.file_exists') == 'on' }}"
+        sequence:
+        # Send Frigate annotated snapshot
+        - service: telegram_bot.send_photo
+          data:
+            target: !input telegram_target
+            file: "{{ frigate_snapshot_path }}"
+            caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
+            inline_keyboard: "{{ inline_keyboard_buttons if media_switching else [] }}"
+          response_variable: initial_message_response
+        
+        - variables:
+            snapshot_success: true
+            initial_message_sent: "{{ initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 }}"
+            message_id: "{{ initial_message_response.chats[0].message_id | int if initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 else 0 }}"
+      
+      # Frigate snapshot failed - try camera fallback if enabled
+      default:
+      - if:
+        - condition: template
+          value_template: "{{ fallback_to_camera }}"
+        then:
+        - service: camera.snapshot
+          target:
+            entity_id: "{{ camera_entity }}"
+          data:
+            filename: "{{ snapshot_path }}"
+        
+        - service: telegram_bot.send_photo
+          data:
+            target: !input telegram_target
+            file: "{{ snapshot_path }}"
+            caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing... (Camera fallback)"
+            inline_keyboard: "{{ inline_keyboard_buttons if media_switching else [] }}"
+          response_variable: initial_message_response
+        
+        - variables:
+            snapshot_success: true
+            initial_message_sent: "{{ initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 }}"
+            message_id: "{{ initial_message_response.chats[0].message_id | int if initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 else 0 }}"
+    
+    # If Frigate snapshots disabled, use camera snapshot directly
+    else:
+    - service: camera.snapshot
+      target:
+        entity_id: "{{ camera_entity }}"
+      data:
+        filename: "{{ snapshot_path }}"
+    
+    - service: telegram_bot.send_photo
+      data:
+        target: !input telegram_target
+        file: "{{ snapshot_path }}"
+        caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
+        inline_keyboard: "{{ inline_keyboard_buttons if media_switching else [] }}"
+      response_variable: initial_message_response
+    
+    - variables:
+        snapshot_success: true
+        initial_message_sent: "{{ initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 }}"
+        message_id: "{{ initial_message_response.chats[0].message_id | int if initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 else 0 }}"
   
-  # Send photo with inline keyboard buttons (if enabled)
-  - service: telegram_bot.send_photo
-    data:
-      target: !input telegram_target
-      file: "{{ snapshot_path }}"
-      caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
-      inline_keyboard: "{{ inline_keyboard_buttons if media_switching else [] }}"
-    response_variable: initial_message_response
-  
-  # Extract message_id from nested structure
-  - variables:
-      initial_message_sent: "{{ initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 }}"
-      message_id: "{{ initial_message_response.chats[0].message_id | int if initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 else 0 }}"
-  
-  # Debug: Log the message_id extraction
+  # Debug: Log the snapshot method used
   - if:
     - condition: template
       value_template: "{{ debug_message_updates }}"
@@ -744,9 +949,11 @@ action:
       data:
         target: !input telegram_target
         message: |
-          🐛 DEBUG: Initial photo sent
+          🐛 DEBUG: Snapshot sent
+          Method: {% if use_frigate_snapshots %}Frigate annotated{% if fallback_to_camera %} (camera fallback available){% endif %}{% else %}Camera direct{% endif %}
+          Success: {{ snapshot_success }}
           Message ID: {{ message_id }}
-          Inline keyboard: {{ inline_keyboard_buttons if media_switching else 'disabled' }}
+          URL: {{ frigate_event_snapshot_url if use_frigate_snapshots else 'Camera entity' }}
 
   # PROGRESSIVE AI ANALYSIS WITH MESSAGE UPDATES
   - variables:
