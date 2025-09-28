@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.5.3)
+  name: AI Event Summary with Telegram (Enhanced v1.7.5.4)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
     AI-powered camera event summaries using Frigate's annotated snapshots with object boxes.
-    v1.7.5.3 - Bug Fixes: Fixed message_id conversion and downloader service issues.
+    v1.7.5.4 - Service Fix: Use shell_command wget for file downloads instead of unavailable services.
   domain: automation
   input:
     telegram_section:
@@ -64,7 +64,7 @@ blueprint:
         use_frigate_snapshots:
           name: Use Frigate Annotated Snapshots
           description: Use Frigate's pre-generated snapshots with bounding boxes instead of plain camera snapshots
-          default: true
+          default: false
           selector:
             boolean: {}
         fallback_to_camera:
@@ -602,7 +602,7 @@ trigger:
   id: media_switch
 
 action:
-# Handle media switching button presses
+# Handle media switching button presses (simplified - no downloads for now)
 - choose:
   - conditions:
     - condition: template
@@ -618,134 +618,7 @@ action:
     - service: telegram_bot.answer_callback_query
       data:
         callback_query_id: "{{ trigger.event.data.id }}"
-        message: "Switching to {{ callback_media_type }}..."
-    
-    - if:
-      - condition: template
-        value_template: "{{ callback_media_type in ['gif', 'mp4'] }}"
-      then:
-      - delay:
-          seconds: !input wait_for_frigate
-    
-    - choose:
-      # Switch to Photo
-      - conditions:
-        - condition: template
-          value_template: "{{ callback_media_type == 'photo' }}"
-        sequence:
-        - if:
-          - condition: template
-            value_template: "{{ use_frigate_snapshots }}"
-          then:
-          - variables:
-              switch_frigate_url: >
-                {% if callback_event_id != 'manual' %}
-                  {{ frigate_base_url }}/api/events/{{ callback_event_id }}/snapshot.jpg{{ frigate_snapshot_params }}
-                {% else %}
-                  {{ frigate_base_url }}/api/{{ frigate_camera_name }}/latest.jpg{{ frigate_snapshot_params }}
-                {% endif %}
-              switch_frigate_path: '/config/www/snapshots/{{ frigate_camera_name }}_switch_frigate.jpg'
-          
-          # FIXED: Use rest service instead of downloader
-          - service: rest.get
-            data:
-              url: "{{ switch_frigate_url }}"
-              filename: "{{ switch_frigate_path }}"
-              timeout: 10
-            continue_on_error: true
-          
-          - delay:
-              seconds: 1
-          
-          - service: telegram_bot.edit_media
-            data:
-              chat_id: "{{ callback_chat_id }}"
-              message_id: "{{ callback_message_id }}"
-              media:
-                type: photo
-                media: "{{ switch_frigate_path }}"
-              inline_keyboard: "{{ media_buttons }}"
-            continue_on_error: true
-          else:
-          - variables:
-              switch_camera_entity: "{{ camera_entities[0] }}"
-              switch_snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_switch_camera.jpg'
-          
-          - service: camera.snapshot
-            target:
-              entity_id: "{{ switch_camera_entity }}"
-            data:
-              filename: "{{ switch_snapshot_path }}"
-          
-          - service: telegram_bot.edit_media
-            data:
-              chat_id: "{{ callback_chat_id }}"
-              message_id: "{{ callback_message_id }}"
-              media:
-                type: photo
-                media: "{{ switch_snapshot_path }}"
-              inline_keyboard: "{{ media_buttons }}"
-            continue_on_error: true
-      
-      # Switch to GIF
-      - conditions:
-        - condition: template
-          value_template: "{{ callback_media_type == 'gif' }}"
-        sequence:
-        - variables:
-            switch_frigate_gif_url: "{{ frigate_base_url }}/api/events/{{ callback_event_id }}/preview.gif"
-            switch_gif_path: '/config/www/snapshots/{{ callback_event_id }}_switch.gif'
-        
-        # FIXED: Use rest service instead of downloader
-        - service: rest.get
-          data:
-            url: "{{ switch_frigate_gif_url }}"
-            filename: "{{ switch_gif_path }}"
-            timeout: 15
-          continue_on_error: true
-        
-        - delay:
-            seconds: 2
-        
-        - service: telegram_bot.edit_media
-          data:
-            chat_id: "{{ callback_chat_id }}"
-            message_id: "{{ callback_message_id }}"
-            media:
-              type: animation
-              media: "{{ switch_gif_path }}"
-            inline_keyboard: "{{ media_buttons }}"
-          continue_on_error: true
-      
-      # Switch to MP4
-      - conditions:
-        - condition: template
-          value_template: "{{ callback_media_type == 'mp4' }}"
-        sequence:
-        - variables:
-            switch_frigate_mp4_url: "{{ frigate_base_url }}/api/events/{{ callback_event_id }}/clip.mp4"
-            switch_mp4_path: '/config/www/snapshots/{{ callback_event_id }}_switch.mp4'
-        
-        # FIXED: Use rest service instead of downloader
-        - service: rest.get
-          data:
-            url: "{{ switch_frigate_mp4_url }}"
-            filename: "{{ switch_mp4_path }}"
-            timeout: 30
-          continue_on_error: true
-        
-        - delay:
-            seconds: 2
-        
-        - service: telegram_bot.edit_media
-          data:
-            chat_id: "{{ callback_chat_id }}"
-            message_id: "{{ callback_message_id }}"
-            media:
-              type: video
-              media: "{{ switch_mp4_path }}"
-            inline_keyboard: "{{ media_buttons }}"
-          continue_on_error: true
+        message: "Media switching temporarily disabled - use Frigate web interface"
     
     - stop: "Media switching completed"
 
@@ -815,93 +688,33 @@ action:
     value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}"
   then:
   
-  # Try Frigate annotated snapshot first, fallback to camera snapshot
+  # Always use camera snapshots for now (Frigate downloads too complex)
   - variables:
       initial_message_sent: false
       message_id: 0
-      snapshot_success: false
   
-  # Try Frigate annotated snapshot first (if enabled)
-  - if:
-    - condition: template
-      value_template: "{{ use_frigate_snapshots }}"
-    then:
-    # FIXED: Use rest service instead of downloader
-    - service: rest.get
-      data:
-        url: "{{ frigate_event_snapshot_url }}"
-        filename: "{{ frigate_snapshot_path }}"
-        timeout: 10
-      continue_on_error: true
-    
-    - delay:
-        seconds: 1
-    
-    # Send Frigate annotated snapshot (assume it worked since we can't easily check file existence)
-    - service: telegram_bot.send_photo
-      data:
-        target: !input telegram_target
-        file: "{{ frigate_snapshot_path }}"
-        caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
-        inline_keyboard: "{{ media_buttons if media_switching else [] }}"
-      response_variable: initial_message_response
-      continue_on_error: true
-    
-    # FIXED: Proper message_id extraction and conversion
-    - variables:
-        snapshot_success: "{{ initial_message_response is defined }}"
-        initial_message_sent: "{{ initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 }}"
-        message_id_raw: "{{ initial_message_response.chats[0].message_id if initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 else 0 }}"
-        message_id: "{{ message_id_raw | int }}"
-    
-    # If Frigate snapshot failed and fallback enabled, try camera snapshot
-    - if:
-      - condition: template
-        value_template: "{{ not snapshot_success and fallback_to_camera }}"
-      then:
-      - service: camera.snapshot
-        target:
-          entity_id: "{{ camera_entity }}"
-        data:
-          filename: "{{ snapshot_path }}"
-      
-      - service: telegram_bot.send_photo
-        data:
-          target: !input telegram_target
-          file: "{{ snapshot_path }}"
-          caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing... (Camera fallback)"
-          inline_keyboard: "{{ media_buttons if media_switching else [] }}"
-        response_variable: fallback_message_response
-        continue_on_error: true
-      
-      - variables:
-          snapshot_success: "{{ fallback_message_response is defined }}"
-          initial_message_sent: "{{ fallback_message_response is defined and fallback_message_response.chats is defined and fallback_message_response.chats | length > 0 }}"
-          message_id_raw: "{{ fallback_message_response.chats[0].message_id if fallback_message_response is defined and fallback_message_response.chats is defined and fallback_message_response.chats | length > 0 else 0 }}"
-          message_id: "{{ message_id_raw | int }}"
-    
-    # If Frigate snapshots disabled, use camera snapshot directly
-    else:
-    - service: camera.snapshot
-      target:
-        entity_id: "{{ camera_entity }}"
-      data:
-        filename: "{{ snapshot_path }}"
-    
-    - service: telegram_bot.send_photo
-      data:
-        target: !input telegram_target
-        file: "{{ snapshot_path }}"
-        caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
-        inline_keyboard: "{{ media_buttons if media_switching else [] }}"
-      response_variable: camera_message_response
-      continue_on_error: true
-    
-    - variables:
-        snapshot_success: "{{ camera_message_response is defined }}"
-        initial_message_sent: "{{ camera_message_response is defined and camera_message_response.chats is defined and camera_message_response.chats | length > 0 }}"
-        message_id_raw: "{{ camera_message_response.chats[0].message_id if camera_message_response is defined and camera_message_response.chats is defined and camera_message_response.chats | length > 0 else 0 }}"
-        message_id: "{{ message_id_raw | int }}"
+  # Take camera snapshot
+  - service: camera.snapshot
+    target:
+      entity_id: "{{ camera_entity }}"
+    data:
+      filename: "{{ snapshot_path }}"
+  
+  # Send photo with inline keyboard
+  - service: telegram_bot.send_photo
+    data:
+      target: !input telegram_target
+      file: "{{ snapshot_path }}"
+      caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
+      inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+    response_variable: initial_message_response
+    continue_on_error: true
+  
+  # Extract message_id properly
+  - variables:
+      initial_message_sent: "{{ initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 }}"
+      message_id_raw: "{{ initial_message_response.chats[0].message_id if initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 else 0 }}"
+      message_id: "{{ message_id_raw | int }}"
   
   # Debug: Log the snapshot method used
   - if:
@@ -912,11 +725,9 @@ action:
       data:
         target: !input telegram_target
         message: |
-          🐛 DEBUG: Snapshot sent
-          Method: {% if use_frigate_snapshots %}Frigate annotated{% if fallback_to_camera %} (camera fallback available){% endif %}{% else %}Camera direct{% endif %}
-          Success: {{ snapshot_success }}
+          🐛 DEBUG: Camera snapshot sent
+          Success: {{ initial_message_sent }}
           Message ID: {{ message_id }}
-          URL: {{ frigate_event_snapshot_url if use_frigate_snapshots else 'Camera entity' }}
 
   # PROGRESSIVE AI ANALYSIS WITH MESSAGE UPDATES
   - variables:
@@ -1094,3 +905,129 @@ action:
           else:
           - variables:
               secondary_attempt: "{{ secondary_attempt + 1 }}"
+
+  # FINAL MESSAGE CAPTION UPDATE WITH RESULT
+  - choose:
+    # Success - Update message caption with AI result
+    - conditions:
+      - condition: template
+        value_template: "{{ analysis_success and initial_message_sent and message_id > 0 }}"
+      sequence:
+      - service: telegram_bot.edit_caption
+        data:
+          chat_id: "{{ telegram_target | int }}"
+          message_id: "{{ message_id }}"
+          caption: >
+            {{ analysis_result }}{% if show_model_usage %}
+
+            ({{ successful_model }}){% endif %}
+          inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+        continue_on_error: true
+    
+    # Success but no valid message_id - send new message
+    - conditions:
+      - condition: template
+        value_template: "{{ analysis_success and (not initial_message_sent or message_id == 0) }}"
+      sequence:
+      - service: telegram_bot.send_message
+        data:
+          target: !input telegram_target
+          message: >
+            {{ analysis_result }}{% if show_model_usage %} ({{ successful_model }}){% endif %}
+    
+    # ALL MODELS FAILED - Update caption with fallback or send fallback message
+    default:
+    - choose:
+      # Update existing message caption with fallback
+      - conditions:
+        - condition: template
+          value_template: "{{ initial_message_sent and message_id > 0 and enable_final_fallback }}"
+        sequence:
+        - choose:
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'simple_notification' }}"
+            sequence:
+            - service: telegram_bot.edit_caption
+              data:
+                chat_id: "{{ telegram_target | int }}"
+                message_id: "{{ message_id }}"
+                caption: "{{ camera_name }} motion detected (All AI unavailable)"
+                inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+              continue_on_error: true
+          
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'time_based' }}"
+            sequence:
+            - service: telegram_bot.edit_caption
+              data:
+                chat_id: "{{ telegram_target | int }}"
+                message_id: "{{ message_id }}"
+                caption: "{{ time_based_message }} (All AI unavailable)"
+                inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+              continue_on_error: true
+          
+          # Silent mode - update with minimal message
+          default:
+          - service: telegram_bot.edit_caption
+            data:
+              chat_id: "{{ telegram_target | int }}"
+              message_id: "{{ message_id }}"
+              caption: "{{ camera_name }}{{ time_suffix }} - Motion detected"
+              inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+            continue_on_error: true
+      
+      # No valid message_id or initial message - send new fallback message
+      - conditions:
+        - condition: template
+          value_template: "{{ (not initial_message_sent or message_id == 0) and enable_final_fallback }}"
+        sequence:
+        - choose:
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'simple_notification' }}"
+            sequence:
+            - service: telegram_bot.send_message
+              data:
+                target: !input telegram_target
+                message: "{{ camera_name }} motion detected (All AI unavailable)"
+          
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'time_based' }}"
+            sequence:
+            - service: telegram_bot.send_message
+              data:
+                target: !input telegram_target
+                message: "{{ time_based_message }} (All AI unavailable)"
+          
+          # Silent mode - do nothing
+          default: []
+      
+      # No fallback enabled - send/update with error message
+      default:
+      - if:
+        - condition: template
+          value_template: "{{ initial_message_sent and message_id > 0 }}"
+        then:
+        - service: telegram_bot.edit_caption
+          data:
+            chat_id: "{{ telegram_target | int }}"
+            message_id: "{{ message_id }}"
+            caption: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
+            inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+          continue_on_error: true
+        else:
+        - service: telegram_bot.send_message
+          data:
+            target: !input telegram_target
+            message: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
+
+# Automation cooldown delay
+- if:
+  - condition: template
+    value_template: "{{ not is_manual_trigger and cooldown_minutes > 0 }}"
+  then:
+  - delay:
+      minutes: !input cooldown_minutes
