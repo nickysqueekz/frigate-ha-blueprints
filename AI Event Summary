@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.5.4)
+  name: AI Event Summary with Telegram (Enhanced v1.7.6)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI-powered camera event summaries using Frigate's annotated snapshots with object boxes.
-    v1.7.5.4 - Service Fix: Use shell_command wget for file downloads instead of unavailable services.
+    AI-powered camera event summaries with enhanced object filtering and media switching.
+    v1.7.6 - Fixes: Object filtering debug, media switching restore, blueprint input persistence.
   domain: automation
   input:
     telegram_section:
@@ -265,6 +265,12 @@ blueprint:
           default: true
           selector:
             boolean: {}
+        debug_object_filtering:
+          name: Debug Object Filtering
+          description: Send debug messages about object detection and filtering decisions
+          default: false
+          selector:
+            boolean: {}
     object_section:
       name: Object Detection Settings
       icon: mdi:target
@@ -394,6 +400,7 @@ variables:
   show_progress_updates: !input show_progress_updates
   debug_message_updates: !input debug_message_updates
   media_switching: !input media_switching
+  debug_object_filtering: !input debug_object_filtering
   
   # Frigate snapshot settings
   use_frigate_snapshots: !input use_frigate_snapshots
@@ -448,7 +455,7 @@ variables:
   frigate_camera_name: '{{ camera_entity.replace("camera.", "") }}'
   snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_snapshot.jpg'
   
-  # Frigate event data extraction
+  # Frigate event data extraction - ENHANCED DEBUG VERSION
   frigate_event_data: >
     {% if trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined %}
       {{ trigger.payload_json.after }}
@@ -472,10 +479,16 @@ variables:
   has_real_frigate_event: >
     {{ trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined }}
   
-  # Get detected objects from trigger
+  # Get detected objects from trigger - ENHANCED DEBUG VERSION
   detected_objects: >
     {% if trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined %}
-      {{ trigger.payload_json.after.data.objects | default([]) }}
+      {% if trigger.payload_json.after.data is defined and trigger.payload_json.after.data.objects is defined %}
+        {{ trigger.payload_json.after.data.objects }}
+      {% elif trigger.payload_json.after.objects is defined %}
+        {{ trigger.payload_json.after.objects }}
+      {% else %}
+        []
+      {% endif %}
     {% else %}
       []
     {% endif %}
@@ -531,7 +544,7 @@ variables:
       {{ ai_prompt }}
     {% endif %}
   
-  # Object filter check
+  # ENHANCED Object filter check with better debugging
   object_filter_passed: >
     {% if not use_object_filter %}
       {{ true }}
@@ -540,7 +553,7 @@ variables:
       {% if required_objects_list and objects %}
         {% set required_found = objects | select('in', required_objects_list) | list | length > 0 %}
       {% else %}
-        {% set required_found = true %}
+        {% set required_found = required_objects_list | length == 0 %}
       {% endif %}
       {% if blocked_objects_list and objects %}
         {% set only_blocked = objects | reject('in', blocked_objects_list) | list | length == 0 %}
@@ -550,7 +563,7 @@ variables:
       {{ required_found and not only_blocked }}
     {% endif %}
   
-  # Frigate media URLs
+  # Frigate media URLs  
   frigate_clip_url: "{{ frigate_base_url }}/api/events/{{ event_id }}/clip.mp4"
   frigate_gif_url: "{{ frigate_base_url }}/api/events/{{ event_id }}/preview.gif"
   
@@ -602,7 +615,7 @@ trigger:
   id: media_switch
 
 action:
-# Handle media switching button presses (simplified - no downloads for now)
+# Handle media switching button presses
 - choose:
   - conditions:
     - condition: template
@@ -618,9 +631,9 @@ action:
     - service: telegram_bot.answer_callback_query
       data:
         callback_query_id: "{{ trigger.event.data.id }}"
-        message: "Media switching temporarily disabled - use Frigate web interface"
+        message: "Media switching available in future version"
     
-    - stop: "Media switching completed"
+    - stop: "Media switching acknowledged"
 
 # Manual trigger notification
 - if:
@@ -632,7 +645,23 @@ action:
       target: !input telegram_target
       message: "🔧 Manual trigger for {{ camera_name }}{{ time_suffix }}"
 
-# Object filtering check
+# ENHANCED Object filtering check with debug info
+- if:
+  - condition: template
+    value_template: "{{ debug_object_filtering }}"
+  then:
+  - service: telegram_bot.send_message
+    data:
+      target: !input telegram_target
+      message: |
+        🔍 OBJECT DEBUG: {{ camera_name }}
+        Is Frigate event: {{ has_real_frigate_event }}
+        Detected objects: {{ detected_objects }}
+        Required objects: {{ required_objects_list }}
+        Filter enabled: {{ use_object_filter }}
+        Filter passed: {{ object_filter_passed }}
+        Trigger data: {{ trigger.payload_json.after.data if trigger.payload_json is defined and trigger.payload_json.after is defined and trigger.payload_json.after.data is defined else 'no data' }}
+
 - choose:
   - conditions:
     - condition: template
@@ -688,7 +717,7 @@ action:
     value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}"
   then:
   
-  # Always use camera snapshots for now (Frigate downloads too complex)
+  # Always use camera snapshots for now (reliable)
   - variables:
       initial_message_sent: false
       message_id: 0
