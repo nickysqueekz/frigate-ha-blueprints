@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.4.4)
+  name: AI Event Summary with Telegram (Enhanced v1.7.4.5)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
     AI-powered camera event summaries with progressive message updates in Telegram.
-    v1.7.4.4 - Fixed: Correct message_id extraction from nested telegram response structure.
+    v1.7.4.5 - Fixed: Use edit_caption for media messages instead of edit_message.
   domain: automation
   input:
     telegram_section:
@@ -754,16 +754,16 @@ action:
           current_model: "{{ primary_models[model_attempt] }}"
           attempt_start_time: "{{ now().timestamp() }}"
       
-      # Update message to show current model being tried (if progress updates enabled AND message_id is valid)
+      # Update message caption to show current model being tried (if progress updates enabled AND message_id is valid)
       - if:
         - condition: template
           value_template: "{{ initial_message_sent and show_progress_updates and model_attempt > 0 and message_id > 0 }}"
         then:
-        - service: telegram_bot.edit_message
+        - service: telegram_bot.edit_caption
           data:
             chat_id: !input telegram_target
             message_id: "{{ message_id }}"
-            message: "🔄 {{ camera_name }}{{ time_suffix }} - Trying {{ current_model }}..."
+            caption: "🔄 {{ camera_name }}{{ time_suffix }} - Trying {{ current_model }}..."
           continue_on_error: true
       
       # Try current model
@@ -833,16 +833,16 @@ action:
     - condition: template
       value_template: "{{ not analysis_success and enable_secondary_provider and secondary_provider is not none and secondary_provider != '' }}"
     then:
-    # Update message to show secondary provider attempt
+    # Update message caption to show secondary provider attempt
     - if:
       - condition: template
         value_template: "{{ initial_message_sent and show_progress_updates and message_id > 0 }}"
       then:
-      - service: telegram_bot.edit_message
+      - service: telegram_bot.edit_caption
         data:
           chat_id: !input telegram_target
           message_id: "{{ message_id }}"
-          message: "🆘 {{ camera_name }}{{ time_suffix }} - Trying secondary provider..."
+          caption: "🆘 {{ camera_name }}{{ time_suffix }} - Trying secondary provider..."
         continue_on_error: true
     
     - variables:
@@ -858,16 +858,16 @@ action:
         - variables:
             current_secondary_model: "{{ secondary_models[secondary_attempt] }}"
         
-        # Update message for secondary model attempt
+        # Update message caption for secondary model attempt
         - if:
           - condition: template
             value_template: "{{ initial_message_sent and show_progress_updates and message_id > 0 }}"
           then:
-          - service: telegram_bot.edit_message
+          - service: telegram_bot.edit_caption
             data:
               chat_id: !input telegram_target
               message_id: "{{ message_id }}"
-              message: "🔄 {{ camera_name }}{{ time_suffix }} - Trying {{ current_secondary_model }}..."
+              caption: "🔄 {{ camera_name }}{{ time_suffix }} - Trying {{ current_secondary_model }}..."
             continue_on_error: true
         
         # Try current secondary model
@@ -917,18 +917,18 @@ action:
           - variables:
               secondary_attempt: "{{ secondary_attempt + 1 }}"
 
-  # FINAL MESSAGE UPDATE WITH RESULT
+  # FINAL MESSAGE CAPTION UPDATE WITH RESULT
   - choose:
-    # Success - Update message with AI result (only if message_id is valid)
+    # Success - Update message caption with AI result (only if message_id is valid)
     - conditions:
       - condition: template
         value_template: "{{ analysis_success and initial_message_sent and message_id > 0 }}"
       sequence:
-      - service: telegram_bot.edit_message
+      - service: telegram_bot.edit_caption
         data:
           chat_id: !input telegram_target
           message_id: "{{ message_id }}"
-          message: >
+          caption: >
             {{ analysis_result }}{% if show_model_usage %}
 
             ({{ successful_model }}){% endif %}
@@ -942,7 +942,7 @@ action:
         - service: telegram_bot.send_message
           data:
             target: !input telegram_target
-            message: "🐛 DEBUG: Successfully edited message {{ message_id }} with final result"
+            message: "🐛 DEBUG: Successfully edited caption for message {{ message_id }} with final result"
     
     # Success but no valid message_id - send new message
     - conditions:
@@ -965,10 +965,10 @@ action:
             target: !input telegram_target
             message: "🐛 DEBUG: Sent new message (couldn't edit original)"
     
-    # ALL MODELS FAILED - Update with fallback or send fallback message
+    # ALL MODELS FAILED - Update caption with fallback or send fallback message
     default:
     - choose:
-      # Update existing message with fallback (only if message_id is valid)
+      # Update existing message caption with fallback (only if message_id is valid)
       - conditions:
         - condition: template
           value_template: "{{ initial_message_sent and message_id > 0 and enable_final_fallback }}"
@@ -978,31 +978,31 @@ action:
             - condition: template
               value_template: "{{ fallback_mode == 'simple_notification' }}"
             sequence:
-            - service: telegram_bot.edit_message
+            - service: telegram_bot.edit_caption
               data:
                 chat_id: !input telegram_target
                 message_id: "{{ message_id }}"
-                message: "{{ camera_name }} motion detected (All AI unavailable)"
+                caption: "{{ camera_name }} motion detected (All AI unavailable)"
               continue_on_error: true
           
           - conditions:
             - condition: template
               value_template: "{{ fallback_mode == 'time_based' }}"
             sequence:
-            - service: telegram_bot.edit_message
+            - service: telegram_bot.edit_caption
               data:
                 chat_id: !input telegram_target
                 message_id: "{{ message_id }}"
-                message: "{{ time_based_message }} (All AI unavailable)"
+                caption: "{{ time_based_message }} (All AI unavailable)"
               continue_on_error: true
           
           # Silent mode - update with minimal message
           default:
-          - service: telegram_bot.edit_message
+          - service: telegram_bot.edit_caption
             data:
               chat_id: !input telegram_target
               message_id: "{{ message_id }}"
-              message: "{{ camera_name }}{{ time_suffix }} - Motion detected"
+              caption: "{{ camera_name }}{{ time_suffix }} - Motion detected"
             continue_on_error: true
       
       # No valid message_id or initial message - send new fallback message
@@ -1038,11 +1038,11 @@ action:
         - condition: template
           value_template: "{{ initial_message_sent and message_id > 0 }}"
         then:
-        - service: telegram_bot.edit_message
+        - service: telegram_bot.edit_caption
           data:
             chat_id: !input telegram_target
             message_id: "{{ message_id }}"
-            message: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
+            caption: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
           continue_on_error: true
         else:
         - service: telegram_bot.send_message
