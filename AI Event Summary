@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.5.1)
+  name: AI Event Summary with Telegram (Enhanced v1.7.5.2)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
     AI-powered camera event summaries using Frigate's annotated snapshots with object boxes.
-    v1.7.5.1 - Frigate Annotations: Use Frigate's built-in bounding box snapshots instead of plain images.
+    v1.7.5.2 - QC Fixed: Complete blueprint with proper YAML structure and Frigate bounding box support.
   domain: automation
   input:
     telegram_section:
@@ -57,6 +57,49 @@ blueprint:
           default: false
           selector:
             boolean: {}
+    snapshot_section:
+      name: Frigate Snapshot Settings
+      icon: mdi:camera-enhance
+      input:
+        use_frigate_snapshots:
+          name: Use Frigate Annotated Snapshots
+          description: Use Frigate's pre-generated snapshots with bounding boxes instead of plain camera snapshots
+          default: true
+          selector:
+            boolean: {}
+        fallback_to_camera:
+          name: Fallback to Camera Snapshots
+          description: Use plain camera snapshots if Frigate annotated snapshots fail
+          default: true
+          selector:
+            boolean: {}
+        include_bounding_boxes:
+          name: Include Bounding Boxes
+          description: Add detection bounding boxes to Frigate snapshots (only for Frigate events)
+          default: true
+          selector:
+            boolean: {}
+        include_timestamp:
+          name: Include Timestamp
+          description: Add timestamp overlay to Frigate snapshots
+          default: false
+          selector:
+            boolean: {}
+        crop_to_objects:
+          name: Crop to Objects  
+          description: Crop snapshot to detected objects area (only for Frigate events)
+          default: false
+          selector:
+            boolean: {}
+        snapshot_height:
+          name: Snapshot Height (pixels)
+          description: Resize snapshot height (leave 0 for original size)
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 2160
+              step: 60
     camera_section:
       name: Camera Settings
       icon: mdi:camera
@@ -106,49 +149,6 @@ blueprint:
               min: 1
               max: 30
               step: 1
-    snapshot_section:
-      name: Snapshot Settings
-      icon: mdi:camera-enhance
-      input:
-        use_frigate_snapshots:
-          name: Use Frigate Annotated Snapshots
-          description: Use Frigate's pre-generated snapshots with bounding boxes instead of plain camera snapshots
-          default: true
-          selector:
-            boolean: {}
-        fallback_to_camera:
-          name: Fallback to Camera Snapshots
-          description: Use plain camera snapshots if Frigate annotated snapshots fail
-          default: true
-          selector:
-            boolean: {}
-        include_bounding_boxes:
-          name: Include Bounding Boxes
-          description: Add detection bounding boxes to Frigate snapshots (only for Frigate events)
-          default: true
-          selector:
-            boolean: {}
-        include_timestamp:
-          name: Include Timestamp
-          description: Add timestamp overlay to Frigate snapshots
-          default: false
-          selector:
-            boolean: {}
-        crop_to_objects:
-          name: Crop to Objects  
-          description: Crop snapshot to detected objects area (only for Frigate events)
-          default: false
-          selector:
-            boolean: {}
-        snapshot_height:
-          name: Snapshot Height (pixels)
-          description: Resize snapshot height (leave 0 for original size)
-          default: 0
-          selector:
-            number:
-              min: 0
-              max: 2160
-              step: 60
     ai_section:
       name: Primary AI Settings
       icon: mdi:brain
@@ -395,7 +395,7 @@ variables:
   debug_message_updates: !input debug_message_updates
   media_switching: !input media_switching
   
-  # NEW: Frigate snapshot settings
+  # Frigate snapshot settings
   use_frigate_snapshots: !input use_frigate_snapshots
   fallback_to_camera: !input fallback_to_camera
   include_bounding_boxes: !input include_bounding_boxes
@@ -425,7 +425,7 @@ variables:
   
   is_manual_trigger: "{{ trigger is not defined }}"
   
-  # Camera entity detection (matches reference blueprint)
+  # Camera entity detection
   camera_entity: >
     {% if motion_sensors and not trigger.entity_id.startswith("camera") %}
       {% set index = motion_sensors.index(trigger.entity_id) %}
@@ -446,11 +446,9 @@ variables:
   
   camera_name: '{{ camera_entity.replace("camera.", "").replace("_", " ").title() }}'
   frigate_camera_name: '{{ camera_entity.replace("camera.", "") }}'
-  
-  # Standard camera snapshot path (fallback)
   snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_snapshot.jpg'
   
-  # Extract enhanced Frigate event data - SAFE VERSION
+  # Frigate event data extraction
   frigate_event_data: >
     {% if trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined %}
       {{ trigger.payload_json.after }}
@@ -458,7 +456,7 @@ variables:
       {}
     {% endif %}
   
-  # Event ID detection (improved logic)
+  # Event ID detection
   event_id: >
     {% if trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined %}
       {{ trigger.payload_json.after.id }}
@@ -466,7 +464,7 @@ variables:
       {{ now().strftime('%Y%m%d_%H%M%S') }}_manual
     {% endif %}
   
-  # Object filtering logic (matches reference blueprint pattern)
+  # Object filtering logic
   required_objects_list: "{{ required_objects.split(',') | map('trim') | list if required_objects else [] }}"
   blocked_objects_list: "{{ blocked_objects.split(',') | map('trim') | list if blocked_objects else [] }}"
   
@@ -474,7 +472,7 @@ variables:
   has_real_frigate_event: >
     {{ trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined }}
   
-  # Get detected objects from trigger (if available)
+  # Get detected objects from trigger
   detected_objects: >
     {% if trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined %}
       {{ trigger.payload_json.after.data.objects | default([]) }}
@@ -482,7 +480,7 @@ variables:
       []
     {% endif %}
   
-  # NEW: Build Frigate snapshot URL with parameters
+  # Build Frigate snapshot URL with parameters
   frigate_snapshot_params: >
     {% set params = [] %}
     {% if include_bounding_boxes and has_real_frigate_event %}
@@ -499,7 +497,7 @@ variables:
     {% endif %}
     {{ '?' + params|join('&') if params else '' }}
   
-  # NEW: Frigate annotated snapshot URLs
+  # Frigate annotated snapshot URLs
   frigate_event_snapshot_url: >
     {% if has_real_frigate_event %}
       {{ frigate_base_url }}/api/events/{{ event_id }}/snapshot.jpg{{ frigate_snapshot_params }}
@@ -507,20 +505,15 @@ variables:
       {{ frigate_base_url }}/api/{{ frigate_camera_name }}/latest.jpg{{ frigate_snapshot_params }}
     {% endif %}
   
-  # Local file path for downloaded Frigate snapshot
   frigate_snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_frigate_{{ event_id }}.jpg'
   
-  # FIXED: Safe Frigate context generation - only if enabled and data exists
+  # Safe Frigate context generation
   frigate_context: >
     {% if use_frigate_enhanced and has_real_frigate_event %}
       {% set context_parts = [] %}
-      
-      {# Basic object detection #}
       {% if detected_objects %}
         {% set context_parts = context_parts + ["Objects: " + detected_objects | join(", ")] %}
       {% endif %}
-      
-      {# Only add if context exists #}
       {% if context_parts %}
         {{ "Frigate detected " + context_parts | join("; ") + "." }}
       {% else %}
@@ -530,7 +523,7 @@ variables:
       {{ "" }}
     {% endif %}
   
-  # Enhanced AI prompt - safer version
+  # Enhanced AI prompt
   enhanced_ai_prompt: >
     {% if frigate_context and frigate_context != "" %}
       {{ frigate_context }} {{ ai_prompt }}
@@ -565,7 +558,7 @@ variables:
   clip_path: '/config/www/snapshots/{{ frigate_camera_name }}_{{ event_id }}.mp4'
   gif_path: '/config/www/snapshots/{{ frigate_camera_name }}_{{ event_id }}.gif'
   
-  # FIXED: Dynamic inline keyboard based on available media (moved from inline_keyboard_buttons to be properly defined)
+  # Dynamic inline keyboard based on available media
   media_buttons: >
     {% if not media_switching %}
       []
@@ -588,7 +581,7 @@ variables:
       Late night motion detected
     {% endif %}
   
-  # Importance prompt (matches reference blueprint style)
+  # Importance prompt
   importance_prompt: >
     Classify the security event based on this image. Choose from the following options: "passive" for unimportant events, "time-sensitive" for notable but non-critical events such as a person at the front door, and "critical" only for potential burglaries or highly suspicious activity. Respond with one of these options exactly, without additional explanation.
 
@@ -604,7 +597,6 @@ trigger:
   entity_id: !input motion_sensors
   to: "on"
   id: motion_trigger
-# Listen for inline keyboard button presses
 - platform: event
   event_type: telegram_callback
   id: media_switch
@@ -623,13 +615,11 @@ action:
         callback_message_id: "{{ trigger.event.data.message.message_id }}"
         callback_chat_id: "{{ trigger.event.data.chat_id }}"
     
-    # Acknowledge the button press
     - service: telegram_bot.answer_callback_query
       data:
         callback_query_id: "{{ trigger.event.data.id }}"
         message: "Switching to {{ callback_media_type }}..."
     
-    # Wait for Frigate processing if switching to GIF/MP4
     - if:
       - condition: template
         value_template: "{{ callback_media_type in ['gif', 'mp4'] }}"
@@ -637,19 +627,16 @@ action:
       - delay:
           seconds: !input wait_for_frigate
     
-    # Switch media based on button pressed
     - choose:
-      # Switch to Photo (with or without bounding boxes based on settings)
+      # Switch to Photo
       - conditions:
         - condition: template
           value_template: "{{ callback_media_type == 'photo' }}"
         sequence:
-        # Try Frigate annotated snapshot first
         - if:
           - condition: template
             value_template: "{{ use_frigate_snapshots }}"
           then:
-          # Build URL for this specific event
           - variables:
               switch_frigate_url: >
                 {% if callback_event_id != 'manual' %}
@@ -668,48 +655,16 @@ action:
           - delay:
               seconds: 1
           
-          # Check if Frigate snapshot download succeeded
-          - choose:
-            - conditions:
-              - condition: template
-                value_template: "{{ states('sensor.file_exists') == 'on' }}"
-              sequence:
-              - service: telegram_bot.edit_media
-                data:
-                  chat_id: "{{ callback_chat_id }}"
-                  message_id: "{{ callback_message_id }}"
-                  media:
-                    type: photo
-                    media: "{{ switch_frigate_path }}"
-                  inline_keyboard: "{{ media_buttons }}"
-                continue_on_error: true
-            # Fallback to camera snapshot if enabled
-            default:
-            - if:
-              - condition: template
-                value_template: "{{ fallback_to_camera }}"
-              then:
-              - variables:
-                  switch_camera_entity: "{{ camera_entities[0] }}"
-                  switch_snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_switch_camera.jpg'
-              
-              - service: camera.snapshot
-                target:
-                  entity_id: "{{ switch_camera_entity }}"
-                data:
-                  filename: "{{ switch_snapshot_path }}"
-              
-              - service: telegram_bot.edit_media
-                data:
-                  chat_id: "{{ callback_chat_id }}"
-                  message_id: "{{ callback_message_id }}"
-                  media:
-                    type: photo
-                    media: "{{ switch_snapshot_path }}"
-                  inline_keyboard: "{{ media_buttons }}"
-                continue_on_error: true
+          - service: telegram_bot.edit_media
+            data:
+              chat_id: "{{ callback_chat_id }}"
+              message_id: "{{ callback_message_id }}"
+              media:
+                type: photo
+                media: "{{ switch_frigate_path }}"
+              inline_keyboard: "{{ media_buttons }}"
+            continue_on_error: true
           else:
-          # Use camera snapshot directly
           - variables:
               switch_camera_entity: "{{ camera_entities[0] }}"
               switch_snapshot_path: '/config/www/snapshots/{{ frigate_camera_name }}_switch_camera.jpg'
@@ -798,7 +753,7 @@ action:
       target: !input telegram_target
       message: "🔧 Manual trigger for {{ camera_name }}{{ time_suffix }}"
 
-# Object filtering check (matches reference blueprint logic)
+# Object filtering check
 - choose:
   - conditions:
     - condition: template
@@ -814,7 +769,7 @@ action:
           message: "🔇 {{ camera_name }}{{ time_suffix }} - Object filter blocked: {{ detected_objects | join(', ') }}"
     - stop: "Objects do not match filter criteria"
 
-# Importance filtering (matches reference blueprint flow)
+# Importance filtering
 - choose:
   - conditions:
     - condition: template
@@ -832,7 +787,7 @@ action:
       response_variable: importance
       continue_on_error: true
 
-# Stop if event is passive (matches reference blueprint)
+# Stop if event is passive
 - choose:
   - conditions:
     - condition: template
@@ -854,7 +809,7 @@ action:
     value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}"
   then:
   
-  # NEW: Try Frigate annotated snapshot first, fallback to camera snapshot
+  # Try Frigate annotated snapshot first, fallback to camera snapshot
   - variables:
       initial_message_sent: false
       message_id: 0
@@ -932,4 +887,328 @@ action:
         target: !input telegram_target
         file: "{{ snapshot_path }}"
         caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
-        inline_keyboard: "{{ media_buttons if media_switching else [] }
+        inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+      response_variable: initial_message_response
+    
+    - variables:
+        snapshot_success: true
+        initial_message_sent: "{{ initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 }}"
+        message_id: "{{ initial_message_response.chats[0].message_id | int if initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 else 0 }}"
+  
+  # Debug: Log the snapshot method used
+  - if:
+    - condition: template
+      value_template: "{{ debug_message_updates }}"
+    then:
+    - service: telegram_bot.send_message
+      data:
+        target: !input telegram_target
+        message: |
+          🐛 DEBUG: Snapshot sent
+          Method: {% if use_frigate_snapshots %}Frigate annotated{% if fallback_to_camera %} (camera fallback available){% endif %}{% else %}Camera direct{% endif %}
+          Success: {{ snapshot_success }}
+          Message ID: {{ message_id }}
+          URL: {{ frigate_event_snapshot_url if use_frigate_snapshots else 'Camera entity' }}
+
+  # PROGRESSIVE AI ANALYSIS WITH MESSAGE UPDATES
+  - variables:
+      analysis_success: false
+      successful_model: ""
+      analysis_result: ""
+      model_attempt: 0
+
+  # Try all primary models with progressive message updates
+  - repeat:
+      while:
+        - condition: template
+          value_template: "{{ not analysis_success and model_attempt < (primary_models | length) }}"
+      sequence:
+      - variables:
+          current_model: "{{ primary_models[model_attempt] }}"
+      
+      # Update message caption to show current model being tried
+      - if:
+        - condition: template
+          value_template: "{{ initial_message_sent and show_progress_updates and model_attempt > 0 and message_id > 0 }}"
+        then:
+        - service: telegram_bot.edit_caption
+          data:
+            chat_id: !input telegram_target
+            message_id: "{{ message_id }}"
+            caption: "🔄 {{ camera_name }}{{ time_suffix }} - Trying {{ current_model }}..."
+            inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+          continue_on_error: true
+      
+      # Try current model
+      - service: llmvision.stream_analyzer
+        data:
+          image_entity: ["{{ camera_entity }}"]
+          duration: !input duration
+          provider: !input provider
+          model: "{{ current_model }}"
+          message: "{{ enhanced_ai_prompt }}"
+          max_frames: !input max_frames
+          target_width: !input target_width
+          max_tokens: !input max_tokens
+          use_memory: "{{ model_attempt == 0 and use_memory }}"
+          remember: "{{ model_attempt == 0 and store_timeline }}"
+          generate_title: "{{ model_attempt == 0 and store_timeline }}"
+          expose_images: "{{ model_attempt == 0 and store_timeline }}"
+          include_filename: true
+        response_variable: current_response
+        continue_on_error: true
+      
+      - variables:
+          response_text: "{{ current_response.get('response_text', '') if current_response is defined else '' }}"
+          is_valid: >
+            {% set text = response_text %}
+            {% if text == '' or 
+                 'Couldn\'t generate content' in text or 
+                 'Check logs for details' in text or 
+                 'API failed' in text or 
+                 'Error:' in text or 
+                 'overloaded' in text %}
+              false
+            {% else %}
+              true
+            {% endif %}
+      
+      # DIAGNOSTIC LOGGING (separate messages if diagnostics enabled)
+      - if:
+        - condition: template
+          value_template: "{{ enable_diagnostics and detailed_error_logging and not is_valid }}"
+        then:
+        - service: telegram_bot.send_message
+          data:
+            target: !input telegram_target
+            message: "🔍 DIAGNOSTIC: {{ current_model }} failed - {{ response_text[:200] }}"
+
+      # Check if this model succeeded
+      - if:
+        - condition: template
+          value_template: "{{ is_valid }}"
+        then:
+        - variables:
+            analysis_success: true
+            successful_model: "{{ current_model }}"
+            analysis_result: "{{ response_text }}"
+        else:
+        - variables:
+            model_attempt: "{{ model_attempt + 1 }}"
+
+  # SECONDARY PROVIDER FALLBACK (if all primary models failed)
+  - if:
+    - condition: template
+      value_template: "{{ not analysis_success and enable_secondary_provider and secondary_provider is not none and secondary_provider != '' }}"
+    then:
+    # Update message caption to show secondary provider attempt
+    - if:
+      - condition: template
+        value_template: "{{ initial_message_sent and show_progress_updates and message_id > 0 }}"
+      then:
+      - service: telegram_bot.edit_caption
+        data:
+          chat_id: !input telegram_target
+          message_id: "{{ message_id }}"
+          caption: "🆘 {{ camera_name }}{{ time_suffix }} - Trying secondary provider..."
+          inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+        continue_on_error: true
+    
+    - variables:
+        secondary_attempt: 0
+        secondary_success: false
+    
+    # Try secondary models
+    - repeat:
+        while:
+          - condition: template
+            value_template: "{{ not secondary_success and secondary_attempt < (secondary_models | length) }}"
+        sequence:
+        - variables:
+            current_secondary_model: "{{ secondary_models[secondary_attempt] }}"
+        
+        # Update message caption for secondary model attempt
+        - if:
+          - condition: template
+            value_template: "{{ initial_message_sent and show_progress_updates and message_id > 0 }}"
+          then:
+          - service: telegram_bot.edit_caption
+            data:
+              chat_id: !input telegram_target
+              message_id: "{{ message_id }}"
+              caption: "🔄 {{ camera_name }}{{ time_suffix }} - Trying {{ current_secondary_model }}..."
+              inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+            continue_on_error: true
+        
+        # Try current secondary model
+        - service: llmvision.stream_analyzer
+          data:
+            image_entity: ["{{ camera_entity }}"]
+            duration: !input duration
+            provider: !input secondary_provider
+            model: "{{ current_secondary_model }}"
+            message: "{{ enhanced_ai_prompt }}"
+            max_frames: !input max_frames
+            target_width: !input target_width
+            max_tokens: !input max_tokens
+            use_memory: false
+            remember: false
+            generate_title: false
+            expose_images: false
+            include_filename: true
+          response_variable: secondary_response
+          continue_on_error: true
+        
+        - variables:
+            secondary_text: "{{ secondary_response.get('response_text', '') if secondary_response is defined else '' }}"
+            secondary_valid: >
+              {% set text = secondary_text %}
+              {% if text == '' or 
+                   'Couldn\'t generate content' in text or 
+                   'Check logs for details' in text or 
+                   'API failed' in text or 
+                   'Error:' in text or 
+                   'overloaded' in text %}
+                false
+              {% else %}
+                true
+              {% endif %}
+        
+        - if:
+          - condition: template
+            value_template: "{{ secondary_valid }}"
+          then:
+          - variables:
+              analysis_success: true
+              secondary_success: true
+              successful_model: "{{ current_secondary_model }} (secondary)"
+              analysis_result: "{{ secondary_text }}"
+          else:
+          - variables:
+              secondary_attempt: "{{ secondary_attempt + 1 }}"
+
+  # FINAL MESSAGE CAPTION UPDATE WITH RESULT
+  - choose:
+    # Success - Update message caption with AI result
+    - conditions:
+      - condition: template
+        value_template: "{{ analysis_success and initial_message_sent and message_id > 0 }}"
+      sequence:
+      - service: telegram_bot.edit_caption
+        data:
+          chat_id: !input telegram_target
+          message_id: "{{ message_id }}"
+          caption: >
+            {{ analysis_result }}{% if show_model_usage %}
+
+            ({{ successful_model }}){% endif %}
+          inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+        continue_on_error: true
+    
+    # Success but no valid message_id - send new message
+    - conditions:
+      - condition: template
+        value_template: "{{ analysis_success and (not initial_message_sent or message_id == 0) }}"
+      sequence:
+      - service: telegram_bot.send_message
+        data:
+          target: !input telegram_target
+          message: >
+            {{ analysis_result }}{% if show_model_usage %} ({{ successful_model }}){% endif %}
+    
+    # ALL MODELS FAILED - Update caption with fallback or send fallback message
+    default:
+    - choose:
+      # Update existing message caption with fallback
+      - conditions:
+        - condition: template
+          value_template: "{{ initial_message_sent and message_id > 0 and enable_final_fallback }}"
+        sequence:
+        - choose:
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'simple_notification' }}"
+            sequence:
+            - service: telegram_bot.edit_caption
+              data:
+                chat_id: !input telegram_target
+                message_id: "{{ message_id }}"
+                caption: "{{ camera_name }} motion detected (All AI unavailable)"
+                inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+              continue_on_error: true
+          
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'time_based' }}"
+            sequence:
+            - service: telegram_bot.edit_caption
+              data:
+                chat_id: !input telegram_target
+                message_id: "{{ message_id }}"
+                caption: "{{ time_based_message }} (All AI unavailable)"
+                inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+              continue_on_error: true
+          
+          # Silent mode - update with minimal message
+          default:
+          - service: telegram_bot.edit_caption
+            data:
+              chat_id: !input telegram_target
+              message_id: "{{ message_id }}"
+              caption: "{{ camera_name }}{{ time_suffix }} - Motion detected"
+              inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+            continue_on_error: true
+      
+      # No valid message_id or initial message - send new fallback message
+      - conditions:
+        - condition: template
+          value_template: "{{ (not initial_message_sent or message_id == 0) and enable_final_fallback }}"
+        sequence:
+        - choose:
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'simple_notification' }}"
+            sequence:
+            - service: telegram_bot.send_message
+              data:
+                target: !input telegram_target
+                message: "{{ camera_name }} motion detected (All AI unavailable)"
+          
+          - conditions:
+            - condition: template
+              value_template: "{{ fallback_mode == 'time_based' }}"
+            sequence:
+            - service: telegram_bot.send_message
+              data:
+                target: !input telegram_target
+                message: "{{ time_based_message }} (All AI unavailable)"
+          
+          # Silent mode - do nothing
+          default: []
+      
+      # No fallback enabled - send/update with error message
+      default:
+      - if:
+        - condition: template
+          value_template: "{{ initial_message_sent and message_id > 0 }}"
+        then:
+        - service: telegram_bot.edit_caption
+          data:
+            chat_id: !input telegram_target
+            message_id: "{{ message_id }}"
+            caption: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
+            inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+          continue_on_error: true
+        else:
+        - service: telegram_bot.send_message
+          data:
+            target: !input telegram_target
+            message: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
+
+# Automation cooldown delay
+- if:
+  - condition: template
+    value_template: "{{ not is_manual_trigger and cooldown_minutes > 0 }}"
+  then:
+  - delay:
+      minutes: !input cooldown_minutes
