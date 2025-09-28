@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.4.1)
+  name: AI Event Summary with Telegram (Enhanced v1.7.4.2)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
     AI-powered camera event summaries with progressive message updates in Telegram.
-    v1.7.4.1 - Hotfix: Fixed YAML structure for progressive message updates.
+    v1.7.4.2 - Hotfix: Fixed message_id handling for telegram edit operations.
   domain: automation
   input:
     telegram_section:
@@ -592,7 +592,7 @@ action:
   # NEW: PROGRESSIVE MESSAGE UPDATES - Send initial message with media
   - variables:
       initial_message_sent: false
-      message_id: ""
+      message_id: 0
   
   # Send initial media with "analyzing..." message
   - choose:
@@ -615,8 +615,8 @@ action:
         response_variable: initial_message_response
       
       - variables:
-          initial_message_sent: true
-          message_id: "{{ initial_message_response.message_id if initial_message_response is defined else 'last' }}"
+          initial_message_sent: "{{ initial_message_response is defined and initial_message_response.message_id is defined }}"
+          message_id: "{{ initial_message_response.message_id | int if initial_message_response is defined and initial_message_response.message_id is defined else 0 }}"
     
     # Frigate Clip (MP4)
     - conditions:
@@ -645,8 +645,8 @@ action:
             response_variable: initial_message_response
           
           - variables:
-              initial_message_sent: true
-              message_id: "{{ initial_message_response.message_id if initial_message_response is defined else 'last' }}"
+              initial_message_sent: "{{ initial_message_response is defined and initial_message_response.message_id is defined }}"
+              message_id: "{{ initial_message_response.message_id | int if initial_message_response is defined and initial_message_response.message_id is defined else 0 }}"
         default:
         - service: camera.snapshot
           target:
@@ -661,8 +661,8 @@ action:
           response_variable: initial_message_response
         
         - variables:
-            initial_message_sent: true
-            message_id: "{{ initial_message_response.message_id if initial_message_response is defined else 'last' }}"
+            initial_message_sent: "{{ initial_message_response is defined and initial_message_response.message_id is defined }}"
+            message_id: "{{ initial_message_response.message_id | int if initial_message_response is defined and initial_message_response.message_id is defined else 0 }}"
     
     # Frigate GIF
     - conditions:
@@ -691,8 +691,8 @@ action:
             response_variable: initial_message_response
           
           - variables:
-              initial_message_sent: true
-              message_id: "{{ initial_message_response.message_id if initial_message_response is defined else 'last' }}"
+              initial_message_sent: "{{ initial_message_response is defined and initial_message_response.message_id is defined }}"
+              message_id: "{{ initial_message_response.message_id | int if initial_message_response is defined and initial_message_response.message_id is defined else 0 }}"
         default:
         - service: camera.snapshot
           target:
@@ -707,8 +707,8 @@ action:
           response_variable: initial_message_response
         
         - variables:
-            initial_message_sent: true
-            message_id: "{{ initial_message_response.message_id if initial_message_response is defined else 'last' }}"
+            initial_message_sent: "{{ initial_message_response is defined and initial_message_response.message_id is defined }}"
+            message_id: "{{ initial_message_response.message_id | int if initial_message_response is defined and initial_message_response.message_id is defined else 0 }}"
 
   # PROGRESSIVE AI ANALYSIS WITH MESSAGE UPDATES
   - variables:
@@ -728,16 +728,17 @@ action:
           current_model: "{{ primary_models[model_attempt] }}"
           attempt_start_time: "{{ now().timestamp() }}"
       
-      # Update message to show current model being tried (if progress updates enabled)
+      # Update message to show current model being tried (if progress updates enabled AND message_id is valid)
       - if:
         - condition: template
-          value_template: "{{ initial_message_sent and show_progress_updates and model_attempt > 0 }}"
+          value_template: "{{ initial_message_sent and show_progress_updates and model_attempt > 0 and message_id > 0 }}"
         then:
         - service: telegram_bot.edit_message
           data:
             chat_id: !input telegram_target
             message_id: "{{ message_id }}"
             message: "🔄 {{ camera_name }}{{ time_suffix }} - Trying {{ current_model }}..."
+          continue_on_error: true
       
       # Try current model
       - service: llmvision.stream_analyzer
@@ -809,13 +810,14 @@ action:
     # Update message to show secondary provider attempt
     - if:
       - condition: template
-        value_template: "{{ initial_message_sent and show_progress_updates }}"
+        value_template: "{{ initial_message_sent and show_progress_updates and message_id > 0 }}"
       then:
       - service: telegram_bot.edit_message
         data:
           chat_id: !input telegram_target
           message_id: "{{ message_id }}"
           message: "🆘 {{ camera_name }}{{ time_suffix }} - Trying secondary provider..."
+        continue_on_error: true
     
     - variables:
         secondary_attempt: 0
@@ -833,13 +835,14 @@ action:
         # Update message for secondary model attempt
         - if:
           - condition: template
-            value_template: "{{ initial_message_sent and show_progress_updates }}"
+            value_template: "{{ initial_message_sent and show_progress_updates and message_id > 0 }}"
           then:
           - service: telegram_bot.edit_message
             data:
               chat_id: !input telegram_target
               message_id: "{{ message_id }}"
               message: "🔄 {{ camera_name }}{{ time_suffix }} - Trying {{ current_secondary_model }}..."
+            continue_on_error: true
         
         # Try current secondary model
         - service: llmvision.stream_analyzer
@@ -890,10 +893,10 @@ action:
 
   # FINAL MESSAGE UPDATE WITH RESULT
   - choose:
-    # Success - Update message with AI result
+    # Success - Update message with AI result (only if message_id is valid)
     - conditions:
       - condition: template
-        value_template: "{{ analysis_success and initial_message_sent }}"
+        value_template: "{{ analysis_success and initial_message_sent and message_id > 0 }}"
       sequence:
       - service: telegram_bot.edit_message
         data:
@@ -903,11 +906,12 @@ action:
             {{ analysis_result }}{% if show_model_usage %}
 
             ({{ successful_model }}){% endif %}
+        continue_on_error: true
     
-    # Success but no initial message - send new message
+    # Success but no valid message_id - send new message
     - conditions:
       - condition: template
-        value_template: "{{ analysis_success and not initial_message_sent }}"
+        value_template: "{{ analysis_success and (not initial_message_sent or message_id == 0) }}"
       sequence:
       - service: telegram_bot.send_message
         data:
@@ -918,10 +922,10 @@ action:
     # ALL MODELS FAILED - Update with fallback or send fallback message
     default:
     - choose:
-      # Update existing message with fallback
+      # Update existing message with fallback (only if message_id is valid)
       - conditions:
         - condition: template
-          value_template: "{{ initial_message_sent and enable_final_fallback }}"
+          value_template: "{{ initial_message_sent and message_id > 0 and enable_final_fallback }}"
         sequence:
         - choose:
           - conditions:
@@ -933,6 +937,7 @@ action:
                 chat_id: !input telegram_target
                 message_id: "{{ message_id }}"
                 message: "{{ camera_name }} motion detected (All AI unavailable)"
+              continue_on_error: true
           
           - conditions:
             - condition: template
@@ -943,6 +948,7 @@ action:
                 chat_id: !input telegram_target
                 message_id: "{{ message_id }}"
                 message: "{{ time_based_message }} (All AI unavailable)"
+              continue_on_error: true
           
           # Silent mode - update with minimal message
           default:
@@ -951,11 +957,12 @@ action:
               chat_id: !input telegram_target
               message_id: "{{ message_id }}"
               message: "{{ camera_name }}{{ time_suffix }} - Motion detected"
+            continue_on_error: true
       
-      # No initial message - send fallback message
+      # No valid message_id or initial message - send new fallback message
       - conditions:
         - condition: template
-          value_template: "{{ not initial_message_sent and enable_final_fallback }}"
+          value_template: "{{ (not initial_message_sent or message_id == 0) and enable_final_fallback }}"
         sequence:
         - choose:
           - conditions:
@@ -979,17 +986,18 @@ action:
           # Silent mode - do nothing
           default: []
       
-      # No fallback enabled - update with error message
+      # No fallback enabled - send/update with error message
       default:
       - if:
         - condition: template
-          value_template: "{{ initial_message_sent }}"
+          value_template: "{{ initial_message_sent and message_id > 0 }}"
         then:
         - service: telegram_bot.edit_message
           data:
             chat_id: !input telegram_target
             message_id: "{{ message_id }}"
             message: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
+          continue_on_error: true
         else:
         - service: telegram_bot.send_message
           data:
