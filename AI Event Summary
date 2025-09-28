@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.4)
+  name: AI Event Summary with Telegram (Enhanced v1.7.4.1)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
     AI-powered camera event summaries with progressive message updates in Telegram.
-    v1.7.4 - Progressive Updates: Single message that updates from "analyzing" through fallbacks to final AI result.
+    v1.7.4.1 - Hotfix: Fixed YAML structure for progressive message updates.
   domain: automation
   input:
     telegram_section:
@@ -956,7 +956,7 @@ action:
       - conditions:
         - condition: template
           value_template: "{{ not initial_message_sent and enable_final_fallback }}"
-        then:
+        sequence:
         - choose:
           - conditions:
             - condition: template
