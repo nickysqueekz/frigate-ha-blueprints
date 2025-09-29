@@ -275,35 +275,37 @@ condition:
 
 action:
   # Debug payload information if enabled
-  - if:
-      - condition: template
-        value_template: "{{ debug_full_payload }}"
-    then:
-      - service: telegram_bot.send_message
-        data:
-          target: "{{ telegram_target }}"
-          message: |
-            🐛 DEBUG - Full Payload:
-            Trigger: {{ trigger.platform }}
-            Entity: {{ trigger.entity_id | default('N/A') }}
-            Topic: {{ trigger.topic | default('N/A') }}
-            Payload: {{ trigger.payload_json | default('N/A') | string | truncate(500) }}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ debug_full_payload }}"
+        sequence:
+          - service: telegram_bot.send_message
+            data:
+              target: "{{ telegram_target }}"
+              message: |
+                🐛 DEBUG - Full Payload:
+                Trigger: {{ trigger.platform }}
+                Entity: {{ trigger.entity_id | default('N/A') }}
+                Topic: {{ trigger.topic | default('N/A') }}
+                Payload: {{ trigger.payload_json | default('N/A') | string | truncate(500) }}
 
   # Debug object filtering if enabled
-  - if:
-      - condition: template
-        value_template: "{{ debug_object_filtering and use_object_filter }}"
-    then:
-      - service: telegram_bot.send_message
-        data:
-          target: "{{ telegram_target }}"
-          message: |
-            🔍 Object Filter Debug:
-            Camera: {{ camera_name }}
-            Detected: {{ detected_objects if detected_objects else 'None' }}
-            Required: {{ required_objects if required_objects else 'None' }}
-            Blocked: {{ blocked_objects if blocked_objects else 'None' }}
-            Filter Result: {{ 'PASS' if objects_match_filter else 'FAIL' }}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ debug_object_filtering and use_object_filter }}"
+        sequence:
+          - service: telegram_bot.send_message
+            data:
+              target: "{{ telegram_target }}"
+              message: |
+                🔍 Object Filter Debug:
+                Camera: {{ camera_name }}
+                Detected: {{ detected_objects if detected_objects else 'None' }}
+                Required: {{ required_objects if required_objects else 'None' }}
+                Blocked: {{ blocked_objects if blocked_objects else 'None' }}
+                Filter Result: {{ 'PASS' if objects_match_filter else 'FAIL' }}
 
   # Apply notification delay
   - delay:
@@ -318,12 +320,12 @@ action:
       # Use Frigate enhanced snapshot
       - conditions:
           - condition: template
-            value_template: "{{ use_frigate_snapshots }}"
+            value_template: "{{ use_frigate_snapshots and trigger.payload_json is defined and trigger.payload_json.after is defined }}"
         sequence:
           - service: telegram_bot.send_photo
             data:
               target: "{{ telegram_target }}"
-              url: "{{ frigate_base_url }}/api/events/{{ trigger.payload_json.after.id | default('latest') }}/snapshot.jpg"
+              url: "{{ frigate_base_url }}/api/events/{{ trigger.payload_json.after.id }}/snapshot.jpg"
               caption: |
                 📷 {{ camera_name }} - Motion Detected
                 🕐 {{ now().strftime('%H:%M:%S') }}
@@ -372,35 +374,36 @@ action:
                 ⏱️ Completed: {{ now().strftime('%H:%M:%S') }}
                 {% endif %}
 
-    # Fallback to secondary provider if enabled
-    - conditions:
-        - condition: template
-          value_template: "{{ enable_secondary_provider and secondary_provider != '' }}"
-      sequence:
-        - if:
-            - condition: template
-              value_template: "{{ show_fallback_notifications }}"
-          then:
-            - service: telegram_bot.send_message
-              data:
-                target: "{{ telegram_target }}"
-                message: "⚠️ Switching to backup AI provider..."
-        
-        - service: llmvision.image_analyzer
-          data:
-            provider: "{{ secondary_provider }}"
-            model: "{{ secondary_model_list.split(',')[0] | trim }}"
-            message: "{{ ai_prompt }}"
-            max_tokens: "{{ max_tokens }}"
-            image_entity: "{{ camera_entities[0] if camera_entities else 'camera.unknown' }}"
-          response_variable: secondary_ai_response
-        
-        - service: telegram_bot.send_message
-          data:
-            target: "{{ telegram_target }}"
-            message: |
-              🤖 AI Analysis (Backup):
-              {{ secondary_ai_response.response_text | default('Backup analysis failed') }}
+      # Fallback to secondary provider if enabled
+      - conditions:
+          - condition: template
+            value_template: "{{ enable_secondary_provider and secondary_provider != '' }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ show_fallback_notifications }}"
+                sequence:
+                  - service: telegram_bot.send_message
+                    data:
+                      target: "{{ telegram_target }}"
+                      message: "⚠️ Switching to backup AI provider..."
+          
+          - service: llmvision.image_analyzer
+            data:
+              provider: "{{ secondary_provider }}"
+              model: "{{ secondary_model_list.split(',')[0] | trim }}"
+              message: "{{ ai_prompt }}"
+              max_tokens: "{{ max_tokens }}"
+              image_entity: "{{ camera_entities[0] if camera_entities else 'camera.unknown' }}"
+            response_variable: secondary_ai_response
+          
+          - service: telegram_bot.send_message
+            data:
+              target: "{{ telegram_target }}"
+              message: |
+                🤖 AI Analysis (Backup):
+                {{ secondary_ai_response.response_text | default('Backup analysis failed') }}
 
     # Final fallback - simple notification
     default:
