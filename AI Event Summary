@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.5.5)
-  author: valentinfrlch (modified for Telegram - v1.7 branch, centralized debug, filtering flaw notification)
+  name: AI Event Summary with Telegram (Enhanced v1.7.5.6)
+  author: valentinfrlch (modified by user, robust error/fallback covering all edge cases)
   homeassistant:
     min_version: 2024.10.0
-  description: >
+  description: |
     AI-powered camera event summaries using Frigate's annotated snapshots with object boxes.
-    v1.7.5.5: Central debug switch; flags flaws in object filtering logic; full error/fallback branch.
+    v1.7.5.6: Fixes empty photo/file errors, safe message ID handling, model overload fallback, robust debug on all errors.
   domain: automation
   input:
     telegram_section:
@@ -14,12 +14,10 @@ blueprint:
       input:
         telegram_target:
           name: Telegram Chat ID
-          description: The chat ID to send notifications to
           selector:
             text: {}
         notification_time:
           name: Notification Time Format
-          description: Add time to notification messages
           default: "12hour"
           selector:
             select:
@@ -32,7 +30,6 @@ blueprint:
                   value: "24hour"
         delay_notification:
           name: Notification Cooldown (Seconds)
-          description: Time to wait before sending another notification (separate from automation cooldown)
           default: 60
           selector:
             number:
@@ -41,13 +38,11 @@ blueprint:
               step: 1
         media_switching:
           name: Enable Media Switching
-          description: Add buttons to switch between photo/GIF/MP4 in the same message
           default: true
           selector:
             boolean: {}
         show_progress_updates:
           name: Show Progress Updates
-          description: Update message text to show analysis progress (analyzing → trying model X → final result)
           default: true
           selector:
             boolean: {}
@@ -57,7 +52,6 @@ blueprint:
       input:
         debug_mode:
           name: Debug Mode (master switch)
-          description: Enable ALL debug and diagnostic messages (overrides all other diagnostic switches)
           default: false
           selector:
             boolean: {}
@@ -67,37 +61,31 @@ blueprint:
       input:
         use_frigate_snapshots:
           name: Use Frigate Annotated Snapshots
-          description: Use Frigate's pre-generated snapshots with bounding boxes instead of plain camera snapshots
           default: false
           selector:
             boolean: {}
         fallback_to_camera:
           name: Fallback to Camera Snapshots
-          description: Use plain camera snapshots if Frigate annotated snapshots fail
           default: true
           selector:
             boolean: {}
         include_bounding_boxes:
           name: Include Bounding Boxes
-          description: Add detection bounding boxes to Frigate snapshots (only for Frigate events)
           default: true
           selector:
             boolean: {}
         include_timestamp:
           name: Include Timestamp
-          description: Add timestamp overlay to Frigate snapshots
           default: false
           selector:
             boolean: {}
         crop_to_objects:
           name: Crop to Objects
-          description: Crop snapshot to detected objects area (only for Frigate events)
           default: false
           selector:
             boolean: {}
         snapshot_height:
           name: Snapshot Height (pixels)
-          description: Resize snapshot height (leave 0 for original size)
           default: 0
           selector:
             number:
@@ -110,14 +98,12 @@ blueprint:
       input:
         camera_entities:
           name: Camera Entities
-          description: Camera entities to monitor (can select multiple)
           selector:
             entity:
               multiple: true
               domain: camera
         motion_sensors:
           name: Motion Sensors (Optional)
-          description: Motion sensors for cameras (same order as cameras). Leave empty if cameras change state directly.
           default: []
           selector:
             entity:
@@ -125,13 +111,11 @@ blueprint:
               domain: binary_sensor
         trigger_state:
           name: Camera Trigger State
-          description: State that triggers the automation for cameras
           default: "recording"
           selector:
             text: {}
         cooldown_minutes:
           name: Automation Cooldown (Minutes)
-          description: Time to wait before running automation again after completion
           default: 5
           selector:
             number:
@@ -140,13 +124,11 @@ blueprint:
               step: 1
         frigate_base_url:
           name: Frigate Base URL
-          description: Base URL for Frigate (e.g., http://frigate.local:5000)
           default: "http://frigate.local:5000"
           selector:
             text: {}
         wait_for_frigate:
           name: Wait for Frigate Processing (Seconds)
-          description: Time to wait for Frigate to generate clip/GIF
           default: 8
           selector:
             number:
@@ -159,26 +141,22 @@ blueprint:
       input:
         provider:
           name: Primary LLM Provider
-          description: Primary provider for AI analysis
           selector:
             config_entry:
               integration: llmvision
         model_list:
           name: Primary Provider Models (Priority Order)
-          description: "Semicolon-separated list of models to try in order (alternating reliable/premium strategy)"
           default: "gemini-2.0-flash;gemini-2.5-pro;gemini-2.0-flash-lite;gemini-2.5-flash;gemini-1.5-flash;gemini-2.5-flash-lite"
           selector:
             text: {}
         ai_prompt:
           name: AI Analysis Prompt
-          description: Prompt sent to AI for analyzing camera footage
           default: "Describe what you see in this security camera footage. Focus on any people, vehicles, or notable activity. Be concise."
           selector:
             text:
               multiline: true
         duration:
           name: Analysis Duration (Seconds)
-          description: How long to record for analysis
           default: 5
           selector:
             number:
@@ -187,7 +165,6 @@ blueprint:
               step: 1
         max_frames:
           name: Maximum Frames
-          description: Maximum number of frames to analyze
           default: 3
           selector:
             number:
@@ -196,7 +173,6 @@ blueprint:
               step: 1
         target_width:
           name: Image Width
-          description: Resize images to this width (lower = faster, less detail)
           default: 1280
           selector:
             number:
@@ -205,7 +181,6 @@ blueprint:
               step: 64
         max_tokens:
           name: Max Response Length
-          description: Maximum length of AI response (higher = more detailed)
           default: 50
           selector:
             number:
@@ -214,13 +189,11 @@ blueprint:
               step: 10
         use_memory:
           name: Use Memory
-          description: Use information stored in memory to provide additional context (requires LLMVision memory setup)
           default: false
           selector:
             boolean: {}
         store_timeline:
           name: Store in Timeline
-          description: Store events in Home Assistant timeline for review
           default: true
           selector:
             boolean: {}
@@ -230,26 +203,22 @@ blueprint:
       input:
         enable_secondary_provider:
           name: Enable Secondary Provider Fallback
-          description: Use different provider when all primary models fail
           default: false
           selector:
             boolean: {}
         secondary_provider:
           name: Secondary LLM Provider
-          description: Fallback provider when all primary models fail (only required if secondary provider is enabled)
           default: null
           selector:
             config_entry:
               integration: llmvision
         secondary_model_list:
           name: Secondary Provider Models (Priority Order)
-          description: "Semicolon-separated list of secondary models to try (e.g., llama-3.2-90b-vision-preview;llama-3.2-11b-vision-preview)"
           default: "llama-3.2-90b-vision-preview;llama-3.2-11b-vision-preview"
           selector:
             text: {}
         show_model_usage:
           name: Show Which Model Succeeded
-          description: Include which model was used in the response
           default: true
           selector:
             boolean: {}
@@ -259,19 +228,16 @@ blueprint:
       input:
         use_object_filter:
           name: Enable Object Filtering
-          description: Only send notifications when specific objects are detected
           default: false
           selector:
             boolean: {}
         required_objects:
           name: Required Objects
-          description: Only send alerts when these objects are detected (comma-separated list). Leave empty to disable.
           default: "person,car,truck,bicycle,motorcycle,dog,cat"
           selector:
             text: {}
         blocked_objects:
           name: Blocked Objects
-          description: Never send alerts when only these objects are detected (comma-separated list). Leave empty to disable.
           default: ""
           selector:
             text: {}
@@ -281,13 +247,11 @@ blueprint:
       input:
         importance_filtering:
           name: Enable Importance Filtering
-          description: Use AI to filter out unimportant events
           default: false
           selector:
             boolean: {}
         show_filtered_events:
           name: Show Filtered Events
-          description: Send a brief message when events are filtered out
           default: false
           selector:
             boolean: {}
@@ -297,13 +261,11 @@ blueprint:
       input:
         enable_final_fallback:
           name: Enable Final Non-LLM Fallback
-          description: Use basic fallback when all LLMs fail
           default: true
           selector:
             boolean: {}
         fallback_mode:
           name: Final Fallback Mode
-          description: What to do when all AI analysis fails
           default: "simple_notification"
           selector:
             select:
@@ -316,7 +278,6 @@ blueprint:
                   value: "silent"
         show_api_errors:
           name: Show API Error Messages
-          description: Send error details to Telegram when AI fails (for debugging)
           default: false
           selector:
             boolean: {}
@@ -547,6 +508,7 @@ action:
   - variables:
       initial_message_sent: false
       message_id: 0
+      initial_message_failed: false
 
   - service: camera.snapshot
     target:
@@ -564,9 +526,24 @@ action:
     continue_on_error: true
 
   - variables:
-      initial_message_sent: "{{ initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 }}"
-      message_id_raw: "{{ initial_message_response.chats[0].message_id if initial_message_response is defined and initial_message_response.chats is defined and initial_message_response.chats | length > 0 else 0 }}"
-      message_id: "{{ message_id_raw | int }}"
+      initial_message_sent: >
+        {{ initial_message_response is defined and
+           initial_message_response.chats is defined and
+           initial_message_response.chats | length > 0 and
+           initial_message_response.chats[0] is defined and
+           initial_message_response.chats[0].message_id is defined }}
+      initial_message_failed: "{{ not initial_message_sent }}"
+      message_id: >
+        {{ initial_message_response.chats[0].message_id if initial_message_sent else 0 }}
+
+  - if:
+    - condition: template
+      value_template: "{{ initial_message_failed }}"
+    then:
+    - service: telegram_bot.send_message
+      data:
+        target: !input telegram_target
+        message: "🛑 DEBUG: Could not send snapshot image (empty or missing file). Using text fallback only."
 
   - if:
     - condition: template
@@ -576,7 +553,7 @@ action:
       data:
         target: !input telegram_target
         message: |
-          🐛 DEBUG: Camera snapshot sent
+          🐛 DEBUG: Camera snapshot attempted
           Success: {{ initial_message_sent }}
           Message ID: {{ message_id }}
 
@@ -595,7 +572,7 @@ action:
           current_model: "{{ primary_models[model_attempt] }}"
       - if:
         - condition: template
-          value_template: "{{ initial_message_sent and show_progress_updates and model_attempt > 0 and message_id > 0 }}"
+          value_template: "{{ initial_message_sent and show_progress_updates and model_attempt > 0 and message_id|int > 0 }}"
         then:
         - service: telegram_bot.edit_caption
           data:
@@ -622,20 +599,24 @@ action:
           include_filename: true
         response_variable: current_response
         continue_on_error: true
+
       - variables:
           response_text: "{{ current_response.get('response_text', '') if current_response is defined else '' }}"
           is_valid: >
-            {% set text = response_text %}
+            {% set text = response_text | lower %}
             {% if text == '' or
-                 'Couldn\'t generate content' in text or
-                 'Check logs for details' in text or
-                 'API failed' in text or
-                 'Error:' in text or
-                 'overloaded' in text %}
+                   'couldn\'t generate content' in text or
+                   'check logs for details' in text or
+                   'api failed' in text or
+                   'error:' in text or
+                   'overloaded' in text or
+                   'the model is overloaded' in text or
+                   'provider' in text and 'failed' in text and 'overloaded' in text %}
               false
             {% else %}
               true
             {% endif %}
+
       - if:
         - condition: template
           value_template: "{{ debug_mode and not is_valid }}"
@@ -664,7 +645,7 @@ action:
     then:
     - if:
       - condition: template
-        value_template: "{{ initial_message_sent and show_progress_updates and message_id > 0 }}"
+        value_template: "{{ initial_message_sent and show_progress_updates and message_id|int > 0 }}"
       then:
       - service: telegram_bot.edit_caption
         data:
@@ -688,7 +669,7 @@ action:
 
         - if:
           - condition: template
-            value_template: "{{ initial_message_sent and show_progress_updates and message_id > 0 }}"
+            value_template: "{{ initial_message_sent and show_progress_updates and message_id|int > 0 }}"
           then:
           - service: telegram_bot.edit_caption
             data:
@@ -719,13 +700,15 @@ action:
         - variables:
             secondary_text: "{{ secondary_response.get('response_text', '') if secondary_response is defined else '' }}"
             secondary_valid: >
-              {% set text = secondary_text %}
+              {% set text = secondary_text | lower %}
               {% if text == '' or
-                   'Couldn\'t generate content' in text or
-                   'Check logs for details' in text or
-                   'API failed' in text or
-                   'Error:' in text or
-                   'overloaded' in text %}
+                     'couldn\'t generate content' in text or
+                     'check logs for details' in text or
+                     'api failed' in text or
+                     'error:' in text or
+                     'overloaded' in text or
+                     'the model is overloaded' in text or
+                     'provider' in text and 'failed' in text and 'overloaded' in text %}
                 false
               {% else %}
                 true
@@ -755,7 +738,7 @@ action:
   - choose:
     - conditions:
       - condition: template
-        value_template: "{{ analysis_success and initial_message_sent and message_id > 0 }}"
+        value_template: "{{ analysis_success and initial_message_sent and message_id|int > 0 }}"
       sequence:
       - service: telegram_bot.edit_caption
         data:
@@ -769,7 +752,7 @@ action:
         continue_on_error: true
     - conditions:
       - condition: template
-        value_template: "{{ analysis_success and (not initial_message_sent or message_id == 0) }}"
+        value_template: "{{ analysis_success and (not initial_message_sent or message_id|int == 0) }}"
       sequence:
       - service: telegram_bot.send_message
         data:
@@ -782,7 +765,7 @@ action:
     - choose:
       - conditions:
         - condition: template
-          value_template: "{{ initial_message_sent and message_id > 0 and enable_final_fallback }}"
+          value_template: "{{ initial_message_sent and message_id|int > 0 and enable_final_fallback }}"
         sequence:
         - choose:
           - conditions:
@@ -817,7 +800,7 @@ action:
             continue_on_error: true
       - conditions:
         - condition: template
-          value_template: "{{ (not initial_message_sent or message_id == 0) and enable_final_fallback }}"
+          value_template: "{{ (not initial_message_sent or message_id|int == 0) and enable_final_fallback }}"
         sequence:
         - choose:
           - conditions:
@@ -840,7 +823,7 @@ action:
       default:
       - if:
         - condition: template
-          value_template: "{{ initial_message_sent and message_id > 0 }}"
+          value_template: "{{ initial_message_sent and message_id|int > 0 }}"
         then:
         - service: telegram_bot.edit_caption
           data:
