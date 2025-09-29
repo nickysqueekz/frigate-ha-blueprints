@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.6)
+  name: AI Event Summary with Telegram (Enhanced v1.7.6.1)
   author: valentinfrlch (modified for Telegram - v1.7 branch)
   homeassistant:
     min_version: 2024.10.0
   description: >
-    AI-powered camera event summaries with enhanced object filtering and media switching.
-    v1.7.6 - Fixes: Object filtering debug, media switching restore, blueprint input persistence.
+    AI-powered camera event summaries with full Frigate payload debugging.
+    v1.7.6.1 - Debug Enhanced: Full MQTT payload inspection to debug object filtering.
   domain: automation
   input:
     telegram_section:
@@ -271,6 +271,12 @@ blueprint:
           default: false
           selector:
             boolean: {}
+        debug_full_payload:
+          name: Debug Full MQTT Payload
+          description: Send complete trigger payload to Telegram for debugging (VERY VERBOSE)
+          default: false
+          selector:
+            boolean: {}
     object_section:
       name: Object Detection Settings
       icon: mdi:target
@@ -401,6 +407,7 @@ variables:
   debug_message_updates: !input debug_message_updates
   media_switching: !input media_switching
   debug_object_filtering: !input debug_object_filtering
+  debug_full_payload: !input debug_full_payload
   
   # Frigate snapshot settings
   use_frigate_snapshots: !input use_frigate_snapshots
@@ -479,13 +486,18 @@ variables:
   has_real_frigate_event: >
     {{ trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined }}
   
-  # Get detected objects from trigger - ENHANCED DEBUG VERSION
+  # Get detected objects from trigger - COMPREHENSIVE EXTRACTION
   detected_objects: >
     {% if trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined %}
-      {% if trigger.payload_json.after.data is defined and trigger.payload_json.after.data.objects is defined %}
-        {{ trigger.payload_json.after.data.objects }}
-      {% elif trigger.payload_json.after.objects is defined %}
-        {{ trigger.payload_json.after.objects }}
+      {% set event_data = trigger.payload_json.after %}
+      {% if event_data.data is defined and event_data.data.objects is defined %}
+        {{ event_data.data.objects | list }}
+      {% elif event_data.objects is defined %}
+        {{ event_data.objects | list }}
+      {% elif event_data.data is defined and event_data.data.detections is defined %}
+        {{ event_data.data.detections.keys() | list }}
+      {% elif event_data.detections is defined %}
+        {{ event_data.detections.keys() | list }}
       {% else %}
         []
       {% endif %}
@@ -615,6 +627,36 @@ trigger:
   id: media_switch
 
 action:
+# NEW: FULL PAYLOAD DEBUGGING (send before anything else)
+- if:
+  - condition: template
+    value_template: "{{ debug_full_payload }}"
+  then:
+  - service: telegram_bot.send_message
+    data:
+      target: !input telegram_target
+      message: |
+        📋 FULL PAYLOAD DEBUG: {{ camera_name }}
+        
+        🔍 Trigger Platform: {{ trigger.platform }}
+        🆔 Trigger Entity: {{ trigger.entity_id if trigger.entity_id is defined else 'undefined' }}
+        ⏰ Trigger At: {{ trigger.at if trigger.at is defined else 'undefined' }}
+        
+        🔶 Has payload_json: {{ trigger.payload_json is defined }}
+        {% if trigger.payload_json is defined %}
+        🔶 Payload Keys: {{ trigger.payload_json.keys() | list }}
+        {% endif %}
+        
+        {% if trigger.payload_json is defined and trigger.payload_json.after is defined %}
+        📦 AFTER Data:
+        {{ trigger.payload_json.after | tojson(indent=2) }}
+        {% else %}
+        📦 AFTER Data: not found
+        {% endif %}
+        
+        🎯 Detected Objects (our extraction): {{ detected_objects }}
+        🎯 Has Frigate Event: {{ has_real_frigate_event }}
+
 # Handle media switching button presses
 - choose:
   - conditions:
@@ -655,12 +697,16 @@ action:
       target: !input telegram_target
       message: |
         🔍 OBJECT DEBUG: {{ camera_name }}
-        Is Frigate event: {{ has_real_frigate_event }}
-        Detected objects: {{ detected_objects }}
-        Required objects: {{ required_objects_list }}
-        Filter enabled: {{ use_object_filter }}
-        Filter passed: {{ object_filter_passed }}
-        Trigger data: {{ trigger.payload_json.after.data if trigger.payload_json is defined and trigger.payload_json.after is defined and trigger.payload_json.after.data is defined else 'no data' }}
+        📱 Is Frigate event: {{ has_real_frigate_event }}
+        🎯 Detected objects: {{ detected_objects }}
+        📝 Required objects: {{ required_objects_list }}
+        🚫 Blocked objects: {{ blocked_objects_list }}
+        ⚡ Filter enabled: {{ use_object_filter }}
+        ✅ Filter passed: {{ object_filter_passed }}
+        
+        📊 Filter Logic:
+        - Required found: {% if required_objects_list %}{{ detected_objects | select('in', required_objects_list) | list }}{% else %}N/A (no requirements){% endif %}
+        - Only blocked: {% if blocked_objects_list %}{{ detected_objects | reject('in', blocked_objects_list) | list | length == 0 }}{% else %}N/A (no blocks){% endif %}
 
 - choose:
   - conditions:
@@ -674,7 +720,7 @@ action:
       - service: telegram_bot.send_message
         data:
           target: !input telegram_target
-          message: "🔇 {{ camera_name }}{{ time_suffix }} - Object filter blocked: {{ detected_objects | join(', ') }}"
+          message: "🔇 {{ camera_name }}{{ time_suffix }} - Object filter blocked: {{ detected_objects | join(', ') }} (Required: {{ required_objects_list | join(', ') }})"
     - stop: "Objects do not match filter criteria"
 
 # Importance filtering
