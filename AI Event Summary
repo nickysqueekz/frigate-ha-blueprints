@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.5.8)
-  author: valentinfrlch (modified for Telegram, comprehensive debug, corrected filter logic)
+  name: AI Event Summary with Telegram (Enhanced v1.7.5.9)
+  author: valentinfrlch (modified for Telegram, comprehensive debug v1.7.5.9)
   homeassistant:
     min_version: 2024.10.0
   description: |
     AI-powered camera event summaries using Frigate's annotated snapshots with object boxes.
-    v1.7.5.8: Corrected object-filter logic to fail when required_objects_list is non-empty and no detections.
+    v1.7.5.9: Adds blueprint version and debug timestamp to FULL PAYLOAD DEBUG; retains robust error/fallback/filter logic.
   domain: automation
   input:
     telegram_section:
@@ -283,6 +283,8 @@ blueprint:
             boolean: {}
 
 variables:
+  blueprint_version: "1.7.5.9"
+  debug_timestamp: "{{ now().isoformat() }}"
   camera_entities: !input camera_entities
   motion_sensors: !input motion_sensors
   telegram_target: !input telegram_target
@@ -345,8 +347,7 @@ variables:
     {% else %}
       []
     {% endif %}
-
-  # Corrected Object Filtering Logic
+  # Corrected filtering logic
   object_filter_passed: >
     {% set objects = detected_objects %}
     {% if not use_object_filter %}
@@ -364,8 +365,6 @@ variables:
       {% endif %}
       {{ required_found and not only_blocked }}
     {% endif %}
-
-  # Exposed for debug
   required_found_debug: >
     {% if required_objects_list %}
       {{ detected_objects | select('in', required_objects_list) | list }}
@@ -378,14 +377,12 @@ variables:
     {% else %}
       "none blocked"
     {% endif %}
-
   object_filter_debug_msg: >
     {% if debug_mode and use_object_filter and not object_filter_passed %}
       "DEBUG: Filtering failed—required_objects: {{ required_objects_list }}, detected: {{ detected_objects }}"
     {% else %}
       ""
     {% endif %}
-
   media_buttons: >
     {% if not media_switching %}
       []
@@ -434,7 +431,7 @@ trigger:
 
 action:
 
-# Full debug for all triggers
+# FULL PAYLOAD DEBUG
 - if:
   - condition: template
     value_template: "{{ debug_mode }}"
@@ -443,7 +440,7 @@ action:
     data:
       target: !input telegram_target
       message: |
-        📋 FULL PAYLOAD DEBUG: {{ camera_name }}
+        📋 FULL PAYLOAD DEBUG v{{ blueprint_version }} @ {{ debug_timestamp }}
 
         🔍 Trigger Platform: {{ trigger_platform }}
         🔧 MQTT Trigger Enabled: {{ is_frigate_event }}
@@ -453,7 +450,6 @@ action:
         ⏰ Trigger At: {{ now() }}
 
         🔶 Has payload_json: {{ trigger_payload != "undefined" }}
-
         📦 PAYLOAD: {% if is_frigate_event %}{{ trigger.payload_json.after | tojson }}{% else %}not found{% endif %}
 
         🎯 Detected Objects: {{ detected_objects_debug }}
@@ -471,12 +467,12 @@ action:
         - Only blocked: {{ only_blocked_debug }}
         - Filter passed: {{ object_filter_passed }}
 
-# Stop if not a Frigate/MQTT event
+# Suppress non-Frigate events
 - if:
   - condition: template
     value_template: "{{ not is_frigate_event }}"
   then:
-  - stop: "Non-Frigate event; no event context for detection. End after debug."
+  - stop: "Non-Frigate event; end after debug."
 
 # Media switch handling
 - choose:
