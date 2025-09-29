@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.5.6)
-  author: valentinfrlch (modified by user, robust error/fallback covering all edge cases)
+  name: AI Event Summary with Telegram (Enhanced v1.7.5.7)
+  author: valentinfrlch (modified for Telegram, robust debug, safe states, filtering, fallback)
   homeassistant:
     min_version: 2024.10.0
   description: |
     AI-powered camera event summaries using Frigate's annotated snapshots with object boxes.
-    v1.7.5.6: Fixes empty photo/file errors, safe message ID handling, model overload fallback, robust debug on all errors.
+    v1.7.5.7: Always full debug dump (if enabled), blocks non-Frigate events after debug, robust error/fallback/notifications, safe for HA 2024.10.
   domain: automation
   input:
     telegram_section:
@@ -395,6 +395,35 @@ variables:
     {% else %}
       Late night motion detected
     {% endif %}
+  is_frigate_event: >
+    {{ trigger.platform == 'mqtt' and trigger.payload_json is defined and trigger.payload_json.after is defined }}
+  trigger_entity: "{{ trigger.entity_id if trigger.entity_id is defined else 'undefined' }}"
+  trigger_platform: "{{ trigger.platform if trigger.platform is defined else 'undefined' }}"
+  trigger_payload: "{{ trigger.payload_json|tojson if trigger.payload_json is defined else 'undefined' }}"
+  detected_objects_debug: "{{ detected_objects|default([]) }}"
+  required_objects_debug: "{{ required_objects_list|default([]) }}"
+  blocked_objects_debug: "{{ blocked_objects_list|default([]) }}"
+  filter_enabled_debug: "{{ use_object_filter }}"
+  filter_passed_debug: "{{ object_filter_passed }}"
+  required_found_debug: >
+    {% if required_objects_list and detected_objects %}
+      {{ detected_objects | select('in', required_objects_list) | list }}
+    {% else %}
+      []
+    {% endif %}
+  only_blocked_debug: >
+    {% if blocked_objects_list and detected_objects %}
+      {{ detected_objects | reject('in', blocked_objects_list) | list | length == 0 }}
+    {% else %}
+      "N/A (no blocks)"
+    {% endif %}
+  debug_note: >
+    {% if not is_frigate_event %}
+      "💡 Note: Object filtering only works with MQTT/Frigate events!"
+    {% else %}
+      ""
+    {% endif %}
+
 max_exceeded: silent
 mode: single
 
@@ -412,6 +441,50 @@ trigger:
   id: media_switch
 
 action:
+
+- if:
+  - condition: template
+    value_template: "{{ debug_mode }}"
+  then:
+  - service: telegram_bot.send_message
+    data:
+      target: !input telegram_target
+      message: |
+        📋 FULL PAYLOAD DEBUG: {{ camera_name }}
+
+        🔍 Trigger Platform: {{ trigger_platform }}
+        🔧 MQTT Trigger Enabled: {{ is_frigate_event }}
+        🆔 Trigger Entity: {{ trigger_entity }}
+        📡 MQTT Topic: {{ trigger.topic if trigger.topic is defined else 'undefined' }}
+        💾 MQTT Payload: {{ trigger_payload }}
+        ⏰ Trigger At: {{ now() }}
+
+        🔶 Has payload_json: {{ trigger_payload != "undefined" }}
+
+        📦 PAYLOAD: {% if is_frigate_event %}{{ trigger.payload_json.after | tojson }}{% else %}not found{% endif %}
+
+        🎯 Detected Objects (our extraction): {{ detected_objects_debug }}
+        🎯 Has Frigate Event: {{ is_frigate_event }}
+
+        📝 Required objects: {{ required_objects_debug }}
+        🚫 Blocked objects: {{ blocked_objects_debug }}
+        ⚡ Filter enabled: {{ filter_enabled_debug }}
+        ✅ Filter passed: {{ filter_passed_debug }}
+
+        📊 Filter Logic:
+        - Required found: {{ required_found_debug }}
+        - Only blocked: {{ only_blocked_debug }}
+
+        {{ debug_note }}
+
+- if:
+  - condition: template
+    value_template: "{{ not is_frigate_event }}"
+  then:
+  - stop: "Non-Frigate event; no event context for object detection. Automation done after debug."
+
+# Main actions (unchanged from v1.7.5.6)
+
 - choose:
   - conditions:
     - condition: template
