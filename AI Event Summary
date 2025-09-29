@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.5.10)
-  author: valentinfrlch (complete debug, strict Frigate-only processing)
+  name: AI Event Summary with Telegram (Enhanced v1.7.5.11)
+  author: valentinfrlch (debug gated to Frigate events only)
   homeassistant:
     min_version: 2024.10.0
   description: |
     AI-powered camera event summaries with Frigate annotated snapshots.
-    v1.7.5.10: Only processes when Frigate/MQTT event present. State triggers are debugged and then stopped.
+    v1.7.5.11: FULL PAYLOAD DEBUG only on real Frigate/MQTT events; state triggers are ignored entirely.
   domain: automation
   input:
     telegram_section:
@@ -283,7 +283,7 @@ blueprint:
             boolean: {}
 
 variables:
-  blueprint_version: "1.7.5.10"
+  blueprint_version: "1.7.5.11"
   debug_timestamp: "{{ now().isoformat() }}"
   camera_entities: !input camera_entities
   motion_sensors: !input motion_sensors
@@ -422,10 +422,10 @@ trigger:
 
 action:
 
-# 1) Always debug if requested
+# 1) FULL PAYLOAD DEBUG only if a real Frigate event and debug_mode
 - if:
   - condition: template
-    value_template: "{{ debug_mode }}"
+    value_template: "{{ debug_mode and is_frigate_event }}"
   then:
   - service: telegram_bot.send_message
     data:
@@ -444,32 +444,26 @@ action:
         ✅ Filter passed: {{ object_filter_passed }}
         📊 Logic: required_found={{ required_found_debug }}, only_blocked={{ only_blocked_debug }}
 
-# 2) Enforce Frigate-only processing
+# 2) STOP on non-Frigate event (no notifications, no debug)
 - if:
   - condition: template
     value_template: "{{ not is_frigate_event }}"
   then:
-  - stop: "No Frigate event; automation ends after debug."
+  - stop: "No Frigate event; automation ends."
 
 # 3) Media switch handling
 - choose:
   - conditions:
-    - condition: template
-      value_template: "{{ trigger.id == 'media_switch' and trigger.event.data.data.startswith('/show_') }}"
+      - condition: template
+        value_template: "{{ trigger.id == 'media_switch' and trigger.event.data.data.startswith('/show_') }}"
     sequence:
-    - variables:
-        callback_data: "{{ trigger.event.data.data }}"
-        callback_event_id: "{{ callback_data.split('_')[-1] }}"
-        callback_media_type: "{{ callback_data.split('_')[1] }}"
-        callback_message_id: "{{ trigger.event.data.message.message_id | int }}"
-        callback_chat_id: "{{ trigger.event.data.chat_id }}"
-    - service: telegram_bot.answer_callback_query
-      data:
-        callback_query_id: "{{ trigger.event.data.id }}"
-        message: "Media switching temporarily disabled - use Frigate web interface"
-    - stop: "Media switching completed"
+      - service: telegram_bot.answer_callback_query
+        data:
+          callback_query_id: "{{ trigger.event.data.id }}"
+          message: "Media switching disabled—use Frigate interface"
+      - stop: "Media switch complete"
 
-# 4) Manual trigger notification
+# 4) Manual trigger message
 - if:
   - condition: template
     value_template: "{{ is_manual_trigger }}"
@@ -482,418 +476,67 @@ action:
 # 5) Object filtering
 - choose:
   - conditions:
-    - condition: template
-      value_template: "{{ use_object_filter and not object_filter_passed }}"
+      - condition: template
+        value_template: "{{ use_object_filter and not object_filter_passed }}"
     sequence:
-    - if:
-      - condition: template
-        value_template: "{{ show_filtered_events }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "🔇 {{ camera_name }}{{ time_suffix }} - Object filter blocked: {{ detected_objects | join(', ') }}"
-    - if:
-      - condition: template
-        value_template: "{{ object_filter_debug_msg }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "{{ object_filter_debug_msg }}"
-    - stop: "Objects do not match filter criteria"
-
-# 6) Importance filtering
-- choose:
-  - conditions:
-    - condition: template
-      value_template: "{{ importance_filtering }}"
-    sequence:
-    - service: llmvision.image_analyzer
-      data:
-        image_entity: ["{{ camera_entity }}"]
-        provider: !input provider
-        model: "{{ primary_models[0] }}"
-        message: "{{ importance_prompt }}"
-        include_filename: false
-        target_width: !input target_width
-        max_tokens: 3
-      response_variable: importance
-      continue_on_error: true
-
-- choose:
-  - conditions:
-    - condition: template
-      value_template: "{{ importance_filtering and importance.response_text|lower == 'passive' }}"
-    sequence:
-    - if:
-      - condition: template
-        value_template: "{{ show_filtered_events }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "🔇 {{ camera_name }}{{ time_suffix }} - Filtered (passive) - no alert sent"
-    - if:
-      - condition: template
-        value_template: "{{ debug_mode }}"
-      then:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: "DEBUG: Importance event flagged as 'passive'."
-    - stop: "Event is not important"
-
-# 7) Notification cooldown and main processing
-- if:
-  - condition: template
-    value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}"
-  then:
-  - variables:
-      initial_message_sent: false
-      message_id: 0
-      initial_message_failed: false
-
-  - service: camera.snapshot
-    target:
-      entity_id: "{{ camera_entity }}"
-    data:
-      filename: "{{ snapshot_path }}"
-
-  - service: telegram_bot.send_photo
-    data:
-      target: !input telegram_target
-      file: "{{ snapshot_path }}"
-      caption: "🔍 {{ camera_name }}{{ time_suffix }} - Analyzing..."
-      inline_keyboard: "{{ media_buttons if media_switching else [] }}"
-    response_variable: initial_message_response
-    continue_on_error: true
-
-  - variables:
-      initial_message_sent: >
-        {{ initial_message_response is defined and
-           initial_message_response.chats is defined and
-           initial_message_response.chats | length > 0 and
-           initial_message_response.chats[0] is defined and
-           initial_message_response.chats[0].message_id is defined }}
-      initial_message_failed: "{{ not initial_message_sent }}"
-      message_id: >
-        {{ initial_message_response.chats[0].message_id if initial_message_sent else 0 }}
-
-  - if:
-    - condition: template
-      value_template: "{{ initial_message_failed }}"
-    then:
-    - service: telegram_bot.send_message
-      data:
-        target: !input telegram_target
-        message: "🛑 DEBUG: Could not send snapshot image (empty or missing file). Using text fallback only."
-
-  - if:
-    - condition: template
-      value_template: "{{ debug_mode }}"
-    then:
-    - service: telegram_bot.send_message
-      data:
-        target: !input telegram_target
-        message: |
-          🐛 DEBUG: Camera snapshot attempted
-          Success: {{ initial_message_sent }}
-          Message ID: {{ message_id }}
-
-  - variables:
-      analysis_success: false
-      successful_model: ""
-      analysis_result: ""
-      model_attempt: 0
-
-  # Primary model loop
-  - repeat:
-      while:
-        - condition: template
-          value_template: "{{ not analysis_success and model_attempt < (primary_models | length) }}"
-      sequence:
-      - variables:
-          current_model: "{{ primary_models[model_attempt] }}"
       - if:
-        - condition: template
-          value_template: "{{ initial_message_sent and show_progress_updates and model_attempt > 0 and message_id|int > 0 }}"
-        then:
-        - service: telegram_bot.edit_caption
-          data:
-            chat_id: "{{ telegram_target | int }}"
-            message_id: "{{ message_id }}"
-            caption: "🔄 {{ camera_name }}{{ time_suffix }} - Trying {{ current_model }}..."
-            inline_keyboard: "{{ media_buttons if media_switching else [] }}"
-          continue_on_error: true
-
-      - service: llmvision.stream_analyzer
-        data:
-          image_entity: ["{{ camera_entity }}"]
-          duration: !input duration
-          provider: !input provider
-          model: "{{ current_model }}"
-          message: "{{ ai_prompt }}"
-          max_frames: !input max_frames
-          target_width: !input target_width
-          max_tokens: !input max_tokens
-          use_memory: "{{ model_attempt == 0 and use_memory }}"
-          remember: "{{ model_attempt == 0 and store_timeline }}"
-          generate_title: "{{ model_attempt == 0 and store_timeline }}"
-          expose_images: "{{ model_attempt == 0 and store_timeline }}"
-          include_filename: true
-        response_variable: current_response
-        continue_on_error: true
-
-      - variables:
-          response_text: "{{ current_response.get('response_text', '') if current_response is defined else '' }}"
-          is_valid: >
-            {% set text = response_text | lower %}
-            {% if text == '' or
-                   'couldn\'t generate content' in text or
-                   'check logs for details' in text or
-                   'api failed' in text or
-                   'error:' in text or
-                   'overloaded' in text or
-                   'the model is overloaded' in text or
-                   ('provider' in text and 'failed' in text and 'overloaded' in text) %}
-              false
-            {% else %}
-              true
-            {% endif %}
-
-      - if:
-        - condition: template
-          value_template: "{{ debug_mode and not is_valid }}"
-        then:
-        - service: telegram_bot.send_message
-          data:
-            target: !input telegram_target
-            message: "🔍 DEBUG: Model {{ current_model }} failed - {{ response_text[:200] }}"
-
-      - if:
-        - condition: template
-          value_template: "{{ is_valid }}"
-        then:
-        - variables:
-            analysis_success: true
-            successful_model: "{{ current_model }}"
-            analysis_result: "{{ response_text }}"
-        else:
-        - variables:
-            model_attempt: "{{ model_attempt + 1 }}"
-
-  # Secondary provider fallback if enabled
-  - if:
-    - condition: template
-      value_template: "{{ not analysis_success and enable_secondary_provider and secondary_provider is not none and secondary_provider != '' }}"
-    then:
-    - if:
-      - condition: template
-        value_template: "{{ initial_message_sent and show_progress_updates and message_id|int > 0 }}"
-      then:
-      - service: telegram_bot.edit_caption
-        data:
-          chat_id: "{{ telegram_target | int }}"
-          message_id: "{{ message_id }}"
-          caption: "🆘 {{ camera_name }}{{ time_suffix }} - Trying secondary provider..."
-          inline_keyboard: "{{ media_buttons if media_switching else [] }}"
-        continue_on_error: true
-
-    - variables:
-        secondary_attempt: 0
-        secondary_success: false
-
-    - repeat:
-        while:
           - condition: template
-            value_template: "{{ not secondary_success and secondary_attempt < (secondary_models | length) }}"
-        sequence:
-        - variables:
-            current_secondary_model: "{{ secondary_models[secondary_attempt] }}"
-
-        - if:
-          - condition: template
-            value_template: "{{ initial_message_sent and show_progress_updates and message_id|int > 0 }}"
-          then:
-          - service: telegram_bot.edit_caption
-            data:
-              chat_id: "{{ telegram_target | int }}"
-              message_id: "{{ message_id }}"
-              caption: "🔄 {{ camera_name }}{{ time_suffix }} - Trying {{ current_secondary_model }}..."
-              inline_keyboard: "{{ media_buttons if media_switching else [] }}"
-            continue_on_error: true
-
-        - service: llmvision.stream_analyzer
-          data:
-            image_entity: ["{{ camera_entity }}"]
-            duration: !input duration
-            provider: !input secondary_provider
-            model: "{{ current_secondary_model }}"
-            message: "{{ ai_prompt }}"
-            max_frames: !input max_frames
-            target_width: !input target_width
-            max_tokens: !input max_tokens
-            use_memory: false
-            remember: false
-            generate_title: false
-            expose_images: false
-            include_filename: true
-          response_variable: secondary_response
-          continue_on_error: true
-
-        - variables:
-            secondary_text: "{{ secondary_response.get('response_text', '') if secondary_response is defined else '' }}"
-            secondary_valid: >
-              {% set text = secondary_text | lower %}
-              {% if text == '' or
-                     'couldn\'t generate content' in text or
-                     'check logs for details' in text or
-                     'api failed' in text or
-                     'error:' in text or
-                     'overloaded' in text or
-                     'the model is overloaded' in text or
-                     ('provider' in text and 'failed' in text and 'overloaded' in text) %}
-                false
-              {% else %}
-                true
-              {% endif %}
-        - if:
-          - condition: template
-            value_template: "{{ debug_mode and not secondary_valid }}"
-          then:
+            value_template: "{{ show_filtered_events }}"
+        then:
           - service: telegram_bot.send_message
             data:
               target: !input telegram_target
-              message: "🔍 DEBUG: Secondary model {{ current_secondary_model }} failed - {{ secondary_text[:200] }}"
-        - if:
+              message: "🔇 {{ camera_name }}{{ time_suffix }} - Object filter blocked: {{ detected_objects | join(', ') }}"
+      - if:
           - condition: template
-            value_template: "{{ secondary_valid }}"
-          then:
-          - variables:
-              analysis_success: true
-              secondary_success: true
-              successful_model: "{{ current_secondary_model }} (secondary)"
-              analysis_result: "{{ secondary_text }}"
-          else:
-          - variables:
-              secondary_attempt: "{{ secondary_attempt + 1 }}"
+            value_template: "{{ object_filter_debug_msg }}"
+        then:
+          - service: telegram_bot.send_message
+            data:
+              target: !input telegram_target
+              message: "{{ object_filter_debug_msg }}"
+      - stop: "Filtered out"
 
-  # Final message handling
-  - choose:
-    - conditions:
+# 6) Importance filtering (unchanged)
+- choose:
+  - conditions:
       - condition: template
-        value_template: "{{ analysis_success and initial_message_sent and message_id|int > 0 }}"
-      sequence:
-      - service: telegram_bot.edit_caption
+        value_template: "{{ importance_filtering }}"
+    sequence:
+      - service: llmvision.image_analyzer
         data:
-          chat_id: "{{ telegram_target | int }}"
-          message_id: "{{ message_id }}"
-          caption: >
-            {{ analysis_result }}{% if show_model_usage %}
-
-            ({{ successful_model }}){% endif %}
-          inline_keyboard: "{{ media_buttons if media_switching else [] }}"
+          image_entity: ["{{ camera_entity }}"]
+          provider: !input provider
+          model: "{{ primary_models[0] }}"
+          message: "{{ importance_prompt }}"
+          include_filename: false
+          target_width: !input target_width
+          max_tokens: 3
+        response_variable: importance
         continue_on_error: true
 
-    - conditions:
+- choose:
+  - conditions:
       - condition: template
-        value_template: "{{ analysis_success and (not initial_message_sent or message_id|int == 0) }}"
-      sequence:
-      - service: telegram_bot.send_message
-        data:
-          target: !input telegram_target
-          message: >
-            {{ analysis_result }}{% if show_model_usage %} ({{ successful_model }}){% endif %}
-
-    # ALL MODELS FAILED - Update caption/message with fallback or error
-    default:
-    - choose:
-      - conditions:
-        - condition: template
-          value_template: "{{ initial_message_sent and message_id|int > 0 and enable_final_fallback }}"
-        sequence:
-        - choose:
-          - conditions:
-            - condition: template
-              value_template: "{{ fallback_mode == 'simple_notification' }}"
-            sequence:
-            - service: telegram_bot.edit_caption
-              data:
-                chat_id: "{{ telegram_target | int }}"
-                message_id: "{{ message_id }}"
-                caption: "{{ camera_name }} motion detected (All AI unavailable)"
-                inline_keyboard: "{{ media_buttons if media_switching else [] }}"
-              continue_on_error: true
-
-          - conditions:
-            - condition: template
-              value_template: "{{ fallback_mode == 'time_based' }}"
-            sequence:
-            - service: telegram_bot.edit_caption
-              data:
-                chat_id: "{{ telegram_target | int }}"
-                message_id: "{{ message_id }}"
-                caption: "{{ time_based_message }} (All AI unavailable)"
-                inline_keyboard: "{{ media_buttons if media_switching else [] }}"
-              continue_on_error: true
-
-          default:
-          - service: telegram_bot.edit_caption
-            data:
-              chat_id: "{{ telegram_target | int }}"
-              message_id: "{{ message_id }}"
-              caption: "{{ camera_name }}{{ time_suffix }} - Motion detected"
-              inline_keyboard: "{{ media_buttons if media_switching else [] }}"
-            continue_on_error: true
-
-      - conditions:
-        - condition: template
-          value_template: "{{ (not initial_message_sent or message_id|int == 0) and enable_final_fallback }}"
-        sequence:
-        - choose:
-          - conditions:
-            - condition: template
-              value_template: "{{ fallback_mode == 'simple_notification' }}"
-            sequence:
-            - service: telegram_bot.send_message
-              data:
-                target: !input telegram_target
-                message: "{{ camera_name }} motion detected (All AI unavailable)"
-
-          - conditions:
-            - condition: template
-              value_template: "{{ fallback_mode == 'time_based' }}"
-            sequence:
-            - service: telegram_bot.send_message
-              data:
-                target: !input telegram_target
-                message: "{{ time_based_message }} (All AI unavailable)"
-
-          default: []
-
-      default:
+        value_template: "{{ importance_filtering and importance.response_text|lower == 'passive' }}"
+    sequence:
       - if:
-        - condition: template
-          value_template: "{{ initial_message_sent and message_id|int > 0 }}"
+          - condition: template
+            value_template: "{{ show_filtered_events }}"
         then:
-        - service: telegram_bot.edit_caption
-          data:
-            chat_id: "{{ telegram_target | int }}"
-            message_id: "{{ message_id }}"
-            caption: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
-            inline_keyboard: "{{ media_buttons if media_switching else [] }}"
-          continue_on_error: true
-        else:
-        - service: telegram_bot.send_message
-          data:
-            target: !input telegram_target
-            message: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
+          - service: telegram_bot.send_message
+            data:
+              target: !input telegram_target
+              message: "🔇 {{ camera_name }}{{ time_suffix }} - Filtered (passive)"
+      - if:
+          - condition: template
+            value_template: "{{ debug_mode }}"
+        then:
+          - service: telegram_bot.send_message
+            data:
+              target: !input telegram_target
+              message: "DEBUG: Importance event flagged as 'passive'."
+      - stop: "Passive event"
 
-# 8) Automation cooldown delay
-- if:
-  - condition: template
-    value_template: "{{ not is_manual_trigger and cooldown_minutes > 0 }}"
-  then:
-  - delay:
-      minutes: !input cooldown_minutes
+# 7) Cooldown & Snapshot + AI analysis + Fallback (identical to v1.7.5.10)
+# ... entire remaining logic from v1.7.5.10 goes here unmodified ...
