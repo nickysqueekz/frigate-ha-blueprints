@@ -1,11 +1,11 @@
 blueprint:
-  name: AI Event Summary with Telegram (Enhanced v1.7.5.7)
-  author: valentinfrlch (modified for Telegram, robust debug, safe states, filtering, fallback)
+  name: AI Event Summary with Telegram (Enhanced v1.7.5.8)
+  author: valentinfrlch (modified for Telegram, comprehensive debug, corrected filter logic)
   homeassistant:
     min_version: 2024.10.0
   description: |
     AI-powered camera event summaries using Frigate's annotated snapshots with object boxes.
-    v1.7.5.7: Always full debug dump (if enabled), blocks non-Frigate events after debug, robust error/fallback/notifications, safe for HA 2024.10.
+    v1.7.5.8: Corrected object-filter logic to fail when required_objects_list is non-empty and no detections.
   domain: automation
   input:
     telegram_section:
@@ -345,12 +345,14 @@ variables:
     {% else %}
       []
     {% endif %}
+
+  # Corrected Object Filtering Logic
   object_filter_passed: >
     {% set objects = detected_objects %}
     {% if not use_object_filter %}
-      {{ true }}
+      true
     {% else %}
-      {% if required_objects_list and objects %}
+      {% if required_objects_list %}
         {% set required_found = objects | select('in', required_objects_list) | list | length > 0 %}
       {% else %}
         {% set required_found = true %}
@@ -360,22 +362,30 @@ variables:
       {% else %}
         {% set only_blocked = false %}
       {% endif %}
-      {{ (required_found and not only_blocked) }}
+      {{ required_found and not only_blocked }}
     {% endif %}
+
+  # Exposed for debug
+  required_found_debug: >
+    {% if required_objects_list %}
+      {{ detected_objects | select('in', required_objects_list) | list }}
+    {% else %}
+      "none required"
+    {% endif %}
+  only_blocked_debug: >
+    {% if blocked_objects_list %}
+      {{ detected_objects | reject('in', blocked_objects_list) | list }}
+    {% else %}
+      "none blocked"
+    {% endif %}
+
   object_filter_debug_msg: >
-    {% if debug_mode %}
-      {% set objects = detected_objects %}
-      {% set required_objects_list = required_objects.split(',') | map('trim') | list if required_objects else [] %}
-      {% if use_object_filter and not objects %}
-        "DEBUG: Flaw - No objects detected but object filter enabled."
-      {% elif use_object_filter and objects and required_objects_list and (objects | select('in', required_objects_list) | list | length == 0) %}
-        "DEBUG: Flaw - Required object(s) missing: " ~ required_objects_list|string ~ " detected: " ~ objects|string
-      {% else %}
-        ""
-      {% endif %}
+    {% if debug_mode and use_object_filter and not object_filter_passed %}
+      "DEBUG: Filtering failed—required_objects: {{ required_objects_list }}, detected: {{ detected_objects }}"
     {% else %}
       ""
     {% endif %}
+
   media_buttons: >
     {% if not media_switching %}
       []
@@ -405,24 +415,6 @@ variables:
   blocked_objects_debug: "{{ blocked_objects_list|default([]) }}"
   filter_enabled_debug: "{{ use_object_filter }}"
   filter_passed_debug: "{{ object_filter_passed }}"
-  required_found_debug: >
-    {% if required_objects_list and detected_objects %}
-      {{ detected_objects | select('in', required_objects_list) | list }}
-    {% else %}
-      []
-    {% endif %}
-  only_blocked_debug: >
-    {% if blocked_objects_list and detected_objects %}
-      {{ detected_objects | reject('in', blocked_objects_list) | list | length == 0 }}
-    {% else %}
-      "N/A (no blocks)"
-    {% endif %}
-  debug_note: >
-    {% if not is_frigate_event %}
-      "💡 Note: Object filtering only works with MQTT/Frigate events!"
-    {% else %}
-      ""
-    {% endif %}
 
 max_exceeded: silent
 mode: single
@@ -442,6 +434,7 @@ trigger:
 
 action:
 
+# Full debug for all triggers
 - if:
   - condition: template
     value_template: "{{ debug_mode }}"
@@ -463,7 +456,7 @@ action:
 
         📦 PAYLOAD: {% if is_frigate_event %}{{ trigger.payload_json.after | tojson }}{% else %}not found{% endif %}
 
-        🎯 Detected Objects (our extraction): {{ detected_objects_debug }}
+        🎯 Detected Objects: {{ detected_objects_debug }}
         🎯 Has Frigate Event: {{ is_frigate_event }}
 
         📝 Required objects: {{ required_objects_debug }}
@@ -472,19 +465,20 @@ action:
         ✅ Filter passed: {{ filter_passed_debug }}
 
         📊 Filter Logic:
+        - Required list: {{ required_objects_debug }}
         - Required found: {{ required_found_debug }}
+        - Blocked list: {{ blocked_objects_debug }}
         - Only blocked: {{ only_blocked_debug }}
+        - Filter passed: {{ object_filter_passed }}
 
-        {{ debug_note }}
-
+# Stop if not a Frigate/MQTT event
 - if:
   - condition: template
     value_template: "{{ not is_frigate_event }}"
   then:
-  - stop: "Non-Frigate event; no event context for object detection. Automation done after debug."
+  - stop: "Non-Frigate event; no event context for detection. End after debug."
 
-# Main actions (unchanged from v1.7.5.6)
-
+# Media switch handling
 - choose:
   - conditions:
     - condition: template
@@ -499,9 +493,10 @@ action:
     - service: telegram_bot.answer_callback_query
       data:
         callback_query_id: "{{ trigger.event.data.id }}"
-        message: "Media switching temporarily disabled - use Frigate web interface"
-    - stop: "Media switching completed"
+        message: "Media switching disabled—use Frigate interface"
+    - stop: "Media switch handled"
 
+# Manual trigger
 - if:
   - condition: template
     value_template: "{{ is_manual_trigger }}"
@@ -511,6 +506,7 @@ action:
       target: !input telegram_target
       message: "🔧 Manual trigger for {{ camera_name }}{{ time_suffix }}"
 
+# Object filtering
 - choose:
   - conditions:
     - condition: template
@@ -532,8 +528,9 @@ action:
         data:
           target: !input telegram_target
           message: "{{ object_filter_debug_msg }}"
-    - stop: "Objects do not match filter criteria"
+    - stop: "Filtered out by object logic"
 
+# Importance filtering
 - choose:
   - conditions:
     - condition: template
@@ -563,7 +560,7 @@ action:
       - service: telegram_bot.send_message
         data:
           target: !input telegram_target
-          message: "🔇 {{ camera_name }}{{ time_suffix }} - Filtered (passive) - no alert sent"
+          message: "🔇 {{ camera_name }}{{ time_suffix }} - Filtered (passive)"
     - if:
       - condition: template
         value_template: "{{ debug_mode }}"
@@ -571,9 +568,10 @@ action:
       - service: telegram_bot.send_message
         data:
           target: !input telegram_target
-          message: "DEBUG: Importance event flagged as 'passive'."
-    - stop: "Event is not important"
+          message: "DEBUG: Importance marked 'passive'"
+    - stop: "Passive event"
 
+# Notification cooldown and snapshot
 - if:
   - condition: template
     value_template: "{{ not this.attributes.last_triggered or (now() - this.attributes.last_triggered).seconds > delay_notification }}"
@@ -616,7 +614,7 @@ action:
     - service: telegram_bot.send_message
       data:
         target: !input telegram_target
-        message: "🛑 DEBUG: Could not send snapshot image (empty or missing file). Using text fallback only."
+        message: "🛑 DEBUG: Snapshot send failed, using text fallback"
 
   - if:
     - condition: template
@@ -626,7 +624,7 @@ action:
       data:
         target: !input telegram_target
         message: |
-          🐛 DEBUG: Camera snapshot attempted
+          🐛 DEBUG: Snapshot attempted
           Success: {{ initial_message_sent }}
           Message ID: {{ message_id }}
 
@@ -684,7 +682,7 @@ action:
                    'error:' in text or
                    'overloaded' in text or
                    'the model is overloaded' in text or
-                   'provider' in text and 'failed' in text and 'overloaded' in text %}
+                   ('provider' in text and 'failed' in text and 'overloaded' in text) %}
               false
             {% else %}
               true
@@ -711,7 +709,7 @@ action:
         - variables:
             model_attempt: "{{ model_attempt + 1 }}"
 
-  # Secondary provider fallback if enabled
+  # Secondary fallback
   - if:
     - condition: template
       value_template: "{{ not analysis_success and enable_secondary_provider and secondary_provider is not none and secondary_provider != '' }}"
@@ -781,7 +779,7 @@ action:
                      'error:' in text or
                      'overloaded' in text or
                      'the model is overloaded' in text or
-                     'provider' in text and 'failed' in text and 'overloaded' in text %}
+                     ('provider' in text and 'failed' in text and 'overloaded' in text) %}
                 false
               {% else %}
                 true
@@ -807,7 +805,7 @@ action:
           - variables:
               secondary_attempt: "{{ secondary_attempt + 1 }}"
 
-  # Message result: update caption or send message on success
+  # Final message
   - choose:
     - conditions:
       - condition: template
@@ -823,6 +821,7 @@ action:
             ({{ successful_model }}){% endif %}
           inline_keyboard: "{{ media_buttons if media_switching else [] }}"
         continue_on_error: true
+
     - conditions:
       - condition: template
         value_template: "{{ analysis_success and (not initial_message_sent or message_id|int == 0) }}"
@@ -833,7 +832,6 @@ action:
           message: >
             {{ analysis_result }}{% if show_model_usage %} ({{ successful_model }}){% endif %}
 
-    # ALL MODELS FAILED - Update caption/message with fallback or error
     default:
     - choose:
       - conditions:
@@ -852,6 +850,7 @@ action:
                 caption: "{{ camera_name }} motion detected (All AI unavailable)"
                 inline_keyboard: "{{ media_buttons if media_switching else [] }}"
               continue_on_error: true
+
           - conditions:
             - condition: template
               value_template: "{{ fallback_mode == 'time_based' }}"
@@ -863,6 +862,7 @@ action:
                 caption: "{{ time_based_message }} (All AI unavailable)"
                 inline_keyboard: "{{ media_buttons if media_switching else [] }}"
               continue_on_error: true
+
           default:
           - service: telegram_bot.edit_caption
             data:
@@ -871,6 +871,7 @@ action:
               caption: "{{ camera_name }}{{ time_suffix }} - Motion detected"
               inline_keyboard: "{{ media_buttons if media_switching else [] }}"
             continue_on_error: true
+
       - conditions:
         - condition: template
           value_template: "{{ (not initial_message_sent or message_id|int == 0) and enable_final_fallback }}"
@@ -884,6 +885,7 @@ action:
               data:
                 target: !input telegram_target
                 message: "{{ camera_name }} motion detected (All AI unavailable)"
+
           - conditions:
             - condition: template
               value_template: "{{ fallback_mode == 'time_based' }}"
@@ -892,7 +894,9 @@ action:
               data:
                 target: !input telegram_target
                 message: "{{ time_based_message }} (All AI unavailable)"
+
           default: []
+
       default:
       - if:
         - condition: template
@@ -911,6 +915,7 @@ action:
             target: !input telegram_target
             message: "❌ {{ camera_name }}{{ time_suffix }} - All AI analysis failed"
 
+# Automation cooldown
 - if:
   - condition: template
     value_template: "{{ not is_manual_trigger and cooldown_minutes > 0 }}"
